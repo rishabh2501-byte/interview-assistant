@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Interview Assistant</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="container" id="app">
+    <!-- Draggable Header -->
+    <div class="header" id="drag-handle">
+      <div class="title">
+        <span class="icon"></span>
+        <span>VideoEditor</span>
+      </div>
+      <div class="controls">
+        <button class="control-btn minimize" id="minimize-btn">−</button>
+        <button class="control-btn close" id="close-btn">×</button>
+      </div>
+    </div>
+
+    <!-- Status Bar -->
+    <div class="status-bar">
+      <div class="status-indicator" id="status-indicator">
+        <span class="dot"></span>
+        <span class="status-text">Ready</span>
+      </div>
+      <div class="listening-indicator" id="listening-indicator">
+        <span class="pulse"></span>
+        <span>Listening...</span>
+      </div>
+    </div>
+
+    <!-- Compact Button Row -->
+    <div class="button-row">
+      <button class="compact-btn ai" id="ai-answer-btn" title="Ctrl+Enter">
+        🤖 Answer
+      </button>
+      <button class="compact-btn ss" id="screenshot-btn" title="Ctrl+Shift+S">
+        📸 Screenshot
+      </button>
+      <button class="compact-btn mic" id="capture-btn">
+        🎤 Listen
+      </button>
+    </div>
+
+    <!-- Transcription Area (compact) -->
+    <div class="section-compact">
+      <div class="section-header">
+        <span>🎙️ Transcription</span>
+        <button class="clear-btn" id="clear-transcript">Clear</button>
+      </div>
+      <div class="transcription-box" id="transcription-box">
+        <p class="placeholder">Listening...</p>
+      </div>
+    </div>
+
+    <!-- AI Response Area (large) -->
+    <div class="response-section-large">
+      <div class="section-header">
+        <span>🤖 AI Response</span>
+        <button class="copy-btn" id="copy-response">Copy</button>
+      </div>
+      <div class="response-box-large" id="response-box">
+        <p class="placeholder">Press Ctrl+Enter for AI answer...</p>
+      </div>
+    </div>
+
+    <!-- Resume/Context Section -->
+    <div class="context-section">
+      <div class="section-header">
+        <span>📝 Your Context</span>
+        <button class="save-btn-small" id="save-context">Save</button>
+      </div>
+      <textarea id="user-context" placeholder="Paste your resume, skills, experience here. AI will use this to personalize answers..."></textarea>
+    </div>
+
+    <!-- Settings Panel -->
+    <div class="settings-panel" id="settings-panel">
+      <div class="setting-item">
+        <label>API Key (api.ai.cc):</label>
+        <input type="password" id="api-key-input" placeholder="sk-...">
+      </div>
+      <div class="setting-item">
+        <label>Groq API Key (free - for Whisper):</label>
+        <input type="password" id="groq-key-input" placeholder="gsk_...">
+        <small style="color: rgba(255,255,255,0.5); font-size: 10px;">Get free key from console.groq.com</small>
+      </div>
+      <div class="setting-item">
+        <label>Language:</label>
+        <select id="language-select">
+          <option value="en">English</option>
+          <option value="hi">Hindi</option>
+          <option value="es">Spanish</option>
+          <option value="fr">French</option>
+          <option value="de">German</option>
+          <option value="zh">Chinese</option>
+          <option value="ja">Japanese</option>
+          <option value="ko">Korean</option>
+          <option value="pt">Portuguese</option>
+          <option value="ru">Russian</option>
+          <option value="ar">Arabic</option>
+        </select>
+      </div>
+      <button class="save-btn" id="save-api-key">Save Keys</button>
+    </div>
+
+    <!-- Footer -->
+    <div class="footer">
+      <button class="settings-toggle" id="settings-toggle">⚙️ Settings</button>
+      <span class="hint">Cmd+D hide | Cmd+N stop</span>
+    </div>
+    
+    <!-- Resize Handle -->
+    <div class="resize-handle" id="resize-handle"></div>
+  </div>
+
+  <script src="renderer.js"></script>
+</body>
+</html>

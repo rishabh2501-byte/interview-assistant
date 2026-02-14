@@ -1,0 +1,753 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Interview Assistant - AI-Powered Interview Copilot</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    :root {
+      --primary: #667eea;
+      --primary-dark: #764ba2;
+      --bg-dark: #0a0a0f;
+      --bg-card: #12121a;
+      --text: #ffffff;
+      --text-muted: #a0a0a0;
+      --gradient: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      --gradient-pink: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+      --gradient-blue: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+    }
+
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      background: var(--bg-dark);
+      color: var(--text);
+      line-height: 1.6;
+      overflow-x: hidden;
+    }
+
+    /* Navbar */
+    .navbar {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      padding: 20px 40px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      z-index: 1000;
+      background: rgba(10, 10, 15, 0.8);
+      backdrop-filter: blur(20px);
+      border-bottom: 1px solid rgba(255,255,255,0.05);
+    }
+
+    .logo {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      font-size: 24px;
+      font-weight: 700;
+    }
+
+    .logo-icon {
+      width: 40px;
+      height: 40px;
+      background: var(--gradient);
+      border-radius: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 20px;
+    }
+
+    .nav-links {
+      display: flex;
+      gap: 40px;
+      align-items: center;
+    }
+
+    .nav-links a {
+      color: var(--text-muted);
+      text-decoration: none;
+      font-size: 14px;
+      font-weight: 500;
+      transition: color 0.3s;
+    }
+
+    .nav-links a:hover {
+      color: var(--text);
+    }
+
+    .nav-cta {
+      background: var(--gradient);
+      color: white;
+      padding: 12px 24px;
+      border-radius: 8px;
+      text-decoration: none;
+      font-weight: 600;
+      font-size: 14px;
+      transition: transform 0.3s, box-shadow 0.3s;
+    }
+
+    .nav-cta:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 10px 40px rgba(102, 126, 234, 0.4);
+    }
+
+    /* Hero Section */
+    .hero {
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      padding: 120px 20px 80px;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .hero::before {
+      content: '';
+      position: absolute;
+      top: -50%;
+      left: -50%;
+      width: 200%;
+      height: 200%;
+      background: radial-gradient(circle at 30% 30%, rgba(102, 126, 234, 0.15) 0%, transparent 50%),
+                  radial-gradient(circle at 70% 70%, rgba(118, 75, 162, 0.15) 0%, transparent 50%);
+      animation: rotate 30s linear infinite;
+    }
+
+    @keyframes rotate {
+      from { transform: rotate(0deg); }
+      to { transform: rotate(360deg); }
+    }
+
+    .hero-content {
+      position: relative;
+      z-index: 1;
+      max-width: 900px;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      background: rgba(102, 126, 234, 0.1);
+      border: 1px solid rgba(102, 126, 234, 0.3);
+      padding: 8px 16px;
+      border-radius: 50px;
+      font-size: 14px;
+      color: var(--primary);
+      margin-bottom: 30px;
+    }
+
+    .badge::before {
+      content: '✨';
+    }
+
+    .hero h1 {
+      font-size: 72px;
+      font-weight: 800;
+      line-height: 1.1;
+      margin-bottom: 24px;
+      background: linear-gradient(135deg, #fff 0%, #a0a0a0 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    .hero h1 span {
+      background: var(--gradient);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    .hero p {
+      font-size: 20px;
+      color: var(--text-muted);
+      max-width: 600px;
+      margin: 0 auto 40px;
+    }
+
+    .hero-buttons {
+      display: flex;
+      gap: 16px;
+      justify-content: center;
+      flex-wrap: wrap;
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      padding: 16px 32px;
+      border-radius: 12px;
+      font-size: 16px;
+      font-weight: 600;
+      text-decoration: none;
+      transition: all 0.3s;
+      cursor: pointer;
+      border: none;
+    }
+
+    .btn-primary {
+      background: var(--gradient);
+      color: white;
+    }
+
+    .btn-primary:hover {
+      transform: translateY(-3px);
+      box-shadow: 0 20px 40px rgba(102, 126, 234, 0.4);
+    }
+
+    .btn-secondary {
+      background: rgba(255,255,255,0.05);
+      color: white;
+      border: 1px solid rgba(255,255,255,0.1);
+    }
+
+    .btn-secondary:hover {
+      background: rgba(255,255,255,0.1);
+      transform: translateY(-3px);
+    }
+
+    .btn-icon {
+      font-size: 20px;
+    }
+
+    /* Stats */
+    .stats {
+      display: flex;
+      gap: 60px;
+      justify-content: center;
+      margin-top: 80px;
+      padding-top: 40px;
+      border-top: 1px solid rgba(255,255,255,0.05);
+    }
+
+    .stat {
+      text-align: center;
+    }
+
+    .stat-value {
+      font-size: 48px;
+      font-weight: 800;
+      background: var(--gradient);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    .stat-label {
+      color: var(--text-muted);
+      font-size: 14px;
+      margin-top: 8px;
+    }
+
+    /* Features Section */
+    .features {
+      padding: 120px 40px;
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+
+    .section-header {
+      text-align: center;
+      margin-bottom: 80px;
+    }
+
+    .section-header h2 {
+      font-size: 48px;
+      font-weight: 700;
+      margin-bottom: 16px;
+    }
+
+    .section-header p {
+      color: var(--text-muted);
+      font-size: 18px;
+      max-width: 600px;
+      margin: 0 auto;
+    }
+
+    .features-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 30px;
+    }
+
+    .feature-card {
+      background: var(--bg-card);
+      border: 1px solid rgba(255,255,255,0.05);
+      border-radius: 20px;
+      padding: 40px;
+      transition: all 0.3s;
+    }
+
+    .feature-card:hover {
+      transform: translateY(-10px);
+      border-color: rgba(102, 126, 234, 0.3);
+      box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+    }
+
+    .feature-icon {
+      width: 60px;
+      height: 60px;
+      border-radius: 16px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 28px;
+      margin-bottom: 24px;
+    }
+
+    .feature-icon.purple { background: var(--gradient); }
+    .feature-icon.pink { background: var(--gradient-pink); }
+    .feature-icon.blue { background: var(--gradient-blue); }
+
+    .feature-card h3 {
+      font-size: 22px;
+      font-weight: 600;
+      margin-bottom: 12px;
+    }
+
+    .feature-card p {
+      color: var(--text-muted);
+      font-size: 15px;
+      line-height: 1.7;
+    }
+
+    /* Download Section */
+    .download {
+      padding: 120px 40px;
+      background: linear-gradient(180deg, transparent 0%, rgba(102, 126, 234, 0.05) 100%);
+    }
+
+    .download-container {
+      max-width: 1000px;
+      margin: 0 auto;
+      text-align: center;
+    }
+
+    .download h2 {
+      font-size: 48px;
+      font-weight: 700;
+      margin-bottom: 16px;
+    }
+
+    .download > p {
+      color: var(--text-muted);
+      font-size: 18px;
+      margin-bottom: 60px;
+    }
+
+    .download-cards {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 30px;
+      margin-bottom: 40px;
+    }
+
+    .download-card {
+      background: var(--bg-card);
+      border: 1px solid rgba(255,255,255,0.05);
+      border-radius: 20px;
+      padding: 40px 30px;
+      transition: all 0.3s;
+    }
+
+    .download-card:hover {
+      transform: translateY(-5px);
+      border-color: rgba(102, 126, 234, 0.3);
+    }
+
+    .download-card .icon {
+      font-size: 48px;
+      margin-bottom: 20px;
+    }
+
+    .download-card h3 {
+      font-size: 24px;
+      font-weight: 600;
+      margin-bottom: 8px;
+    }
+
+    .download-card p {
+      color: var(--text-muted);
+      font-size: 14px;
+      margin-bottom: 24px;
+    }
+
+    .download-card .btn {
+      width: 100%;
+      justify-content: center;
+    }
+
+    /* How It Works */
+    .how-it-works {
+      padding: 120px 40px;
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+
+    .steps {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 30px;
+      margin-top: 60px;
+    }
+
+    .step {
+      text-align: center;
+      position: relative;
+    }
+
+    .step::after {
+      content: '→';
+      position: absolute;
+      right: -20px;
+      top: 40px;
+      font-size: 24px;
+      color: var(--text-muted);
+    }
+
+    .step:last-child::after {
+      display: none;
+    }
+
+    .step-number {
+      width: 60px;
+      height: 60px;
+      background: var(--gradient);
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 24px;
+      font-weight: 700;
+      margin: 0 auto 20px;
+    }
+
+    .step h3 {
+      font-size: 18px;
+      font-weight: 600;
+      margin-bottom: 8px;
+    }
+
+    .step p {
+      color: var(--text-muted);
+      font-size: 14px;
+    }
+
+    /* Pricing */
+    .pricing {
+      padding: 120px 40px;
+      background: var(--bg-card);
+    }
+
+    .pricing-container {
+      max-width: 500px;
+      margin: 0 auto;
+      text-align: center;
+    }
+
+    .price-card {
+      background: var(--bg-dark);
+      border: 2px solid var(--primary);
+      border-radius: 24px;
+      padding: 50px 40px;
+      margin-top: 40px;
+    }
+
+    .price-badge {
+      display: inline-block;
+      background: var(--gradient);
+      padding: 6px 16px;
+      border-radius: 50px;
+      font-size: 12px;
+      font-weight: 600;
+      margin-bottom: 20px;
+    }
+
+    .price {
+      font-size: 64px;
+      font-weight: 800;
+    }
+
+    .price span {
+      font-size: 20px;
+      color: var(--text-muted);
+      font-weight: 400;
+    }
+
+    .price-features {
+      list-style: none;
+      margin: 30px 0;
+      text-align: left;
+    }
+
+    .price-features li {
+      padding: 12px 0;
+      border-bottom: 1px solid rgba(255,255,255,0.05);
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .price-features li::before {
+      content: '✓';
+      color: #10b981;
+      font-weight: 700;
+    }
+
+    /* Footer */
+    .footer {
+      padding: 60px 40px;
+      border-top: 1px solid rgba(255,255,255,0.05);
+      text-align: center;
+    }
+
+    .footer p {
+      color: var(--text-muted);
+      font-size: 14px;
+    }
+
+    .footer-links {
+      display: flex;
+      gap: 30px;
+      justify-content: center;
+      margin-top: 20px;
+    }
+
+    .footer-links a {
+      color: var(--text-muted);
+      text-decoration: none;
+      font-size: 14px;
+      transition: color 0.3s;
+    }
+
+    .footer-links a:hover {
+      color: var(--text);
+    }
+
+    /* Responsive */
+    @media (max-width: 968px) {
+      .hero h1 { font-size: 48px; }
+      .features-grid { grid-template-columns: repeat(2, 1fr); }
+      .download-cards { grid-template-columns: 1fr; }
+      .steps { grid-template-columns: repeat(2, 1fr); }
+      .step::after { display: none; }
+      .nav-links { display: none; }
+    }
+
+    @media (max-width: 640px) {
+      .hero h1 { font-size: 36px; }
+      .features-grid { grid-template-columns: 1fr; }
+      .stats { flex-direction: column; gap: 30px; }
+      .steps { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <!-- Navbar -->
+  <nav class="navbar">
+    <div class="logo">
+      <div class="logo-icon">🎯</div>
+      <span>Interview Assistant</span>
+    </div>
+    <div class="nav-links">
+      <a href="#features">Features</a>
+      <a href="#download">Download</a>
+      <a href="#how-it-works">How It Works</a>
+      <a href="#pricing">Pricing</a>
+    </div>
+    <a href="#download" class="nav-cta">Download Free</a>
+  </nav>
+
+  <!-- Hero Section -->
+  <section class="hero">
+    <div class="hero-content">
+      <div class="badge">AI-Powered Interview Copilot</div>
+      <h1>Ace Every Interview with <span>AI Assistance</span></h1>
+      <p>Real-time transcription, instant AI answers, and screen analysis. Invisible during screen share. Your secret weapon for interviews.</p>
+      <div class="hero-buttons">
+        <a href="#download" class="btn btn-primary">
+          <span class="btn-icon">⬇️</span>
+          Download for Free
+        </a>
+        <a href="#how-it-works" class="btn btn-secondary">
+          <span class="btn-icon">▶️</span>
+          See How It Works
+        </a>
+      </div>
+      <div class="stats">
+        <div class="stat">
+          <div class="stat-value">99%</div>
+          <div class="stat-label">Accuracy Rate</div>
+        </div>
+        <div class="stat">
+          <div class="stat-value">&lt;3s</div>
+          <div class="stat-label">Response Time</div>
+        </div>
+        <div class="stat">
+          <div class="stat-value">100%</div>
+          <div class="stat-label">Invisible</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Features Section -->
+  <section class="features" id="features">
+    <div class="section-header">
+      <h2>Powerful Features</h2>
+      <p>Everything you need to succeed in your interviews</p>
+    </div>
+    <div class="features-grid">
+      <div class="feature-card">
+        <div class="feature-icon purple">🎙️</div>
+        <h3>Real-Time Transcription</h3>
+        <p>State-of-the-art Whisper AI transcribes your interview in real-time with 99% accuracy. Supports 10+ languages.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon pink">🤖</div>
+        <h3>Instant AI Answers</h3>
+        <p>Press Ctrl+Enter and get expert-level answers instantly. Powered by GPT-4 and Llama 3.3 for accurate responses.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon blue">📸</div>
+        <h3>Screenshot Analysis</h3>
+        <p>Capture and analyze coding problems, diagrams, or any visual content. Get solutions in seconds.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon purple">👻</div>
+        <h3>Invisible Mode</h3>
+        <p>100% invisible during screen share. Uses advanced content protection - interviewers will never know.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon pink">📝</div>
+        <h3>Resume Context</h3>
+        <p>Add your resume and experience. AI personalizes answers based on YOUR background and skills.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon blue">⌨️</div>
+        <h3>Keyboard Shortcuts</h3>
+        <p>Control everything with shortcuts. Move, hide, answer - all without touching your mouse.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- Download Section -->
+  <section class="download" id="download">
+    <div class="download-container">
+      <h2>Download Now</h2>
+      <p>Available for all platforms. Free forever.</p>
+      <div class="download-cards">
+        <div class="download-card">
+          <div class="icon">🍎</div>
+          <h3>macOS</h3>
+          <p>For Apple Silicon & Intel Macs</p>
+          <a href="dist/Interview Assistant-1.0.0-arm64.dmg" class="btn btn-primary" download>
+            Download .dmg
+          </a>
+        </div>
+        <div class="download-card">
+          <div class="icon">🪟</div>
+          <h3>Windows</h3>
+          <p>For Windows 10/11</p>
+          <a href="dist/Interview Assistant Setup 1.0.0.exe" class="btn btn-primary" download>
+            Download .exe
+          </a>
+        </div>
+        <div class="download-card">
+          <div class="icon">🌐</div>
+          <h3>Chrome Extension</h3>
+          <p>Works on any website</p>
+          <a href="chrome-extension/" class="btn btn-secondary">
+            Load Unpacked
+          </a>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- How It Works -->
+  <section class="how-it-works" id="how-it-works">
+    <div class="section-header">
+      <h2>How It Works</h2>
+      <p>Get started in under 2 minutes</p>
+    </div>
+    <div class="steps">
+      <div class="step">
+        <div class="step-number">1</div>
+        <h3>Download & Install</h3>
+        <p>Download the app for your platform and install it</p>
+      </div>
+      <div class="step">
+        <div class="step-number">2</div>
+        <h3>Add API Key</h3>
+        <p>Get a free Groq API key and paste it in settings</p>
+      </div>
+      <div class="step">
+        <div class="step-number">3</div>
+        <h3>Join Interview</h3>
+        <p>Start your interview - app auto-listens and transcribes</p>
+      </div>
+      <div class="step">
+        <div class="step-number">4</div>
+        <h3>Get Answers</h3>
+        <p>Press Ctrl+Enter anytime for instant AI answers</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- Pricing -->
+  <section class="pricing" id="pricing">
+    <div class="pricing-container">
+      <div class="section-header">
+        <h2>Simple Pricing</h2>
+        <p>No subscriptions. No hidden fees.</p>
+      </div>
+      <div class="price-card">
+        <div class="price-badge">FOREVER FREE</div>
+        <div class="price">$0 <span>/ forever</span></div>
+        <ul class="price-features">
+          <li>Unlimited transcription</li>
+          <li>Unlimited AI answers</li>
+          <li>Screenshot analysis</li>
+          <li>All keyboard shortcuts</li>
+          <li>Resume personalization</li>
+          <li>Multi-language support</li>
+          <li>Invisible mode</li>
+          <li>All future updates</li>
+        </ul>
+        <a href="#download" class="btn btn-primary" style="width: 100%; justify-content: center;">
+          Download Free
+        </a>
+      </div>
+    </div>
+  </section>
+
+  <!-- Footer -->
+  <footer class="footer">
+    <p>© 2024 Interview Assistant. Built with ❤️ for job seekers.</p>
+    <div class="footer-links">
+      <a href="#">Privacy Policy</a>
+      <a href="#">Terms of Service</a>
+      <a href="#">Contact</a>
+      <a href="https://github.com" target="_blank">GitHub</a>
+    </div>
+  </footer>
+</body>
+</html>

@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      width: 380px;
+      min-height: 500px;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+      color: white;
+    }
+
+    .container {
+      padding: 16px;
+    }
+
+    .header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 16px;
+      padding-bottom: 12px;
+      border-bottom: 1px solid rgba(255,255,255,0.1);
+    }
+
+    .title {
+      font-size: 16px;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .status {
+      font-size: 11px;
+      padding: 4px 8px;
+      border-radius: 12px;
+      background: rgba(255,255,255,0.1);
+    }
+
+    .status.recording {
+      background: #ef4444;
+      animation: pulse 1.5s infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.6; }
+    }
+
+    .button-row {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+
+    .btn {
+      flex: 1;
+      padding: 10px;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 600;
+      color: white;
+      transition: all 0.2s;
+    }
+
+    .btn:hover {
+      transform: translateY(-1px);
+      filter: brightness(1.1);
+    }
+
+    .btn.ai { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); }
+    .btn.ss { background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%); }
+    .btn.mic { background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%); }
+    .btn.mic.active { background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%); }
+
+    .section {
+      margin-bottom: 12px;
+    }
+
+    .section-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 6px;
+      font-size: 11px;
+      color: rgba(255,255,255,0.6);
+    }
+
+    .section-header button {
+      background: rgba(255,255,255,0.1);
+      border: none;
+      color: rgba(255,255,255,0.6);
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-size: 10px;
+      cursor: pointer;
+    }
+
+    .box {
+      background: rgba(0,0,0,0.3);
+      border-radius: 8px;
+      padding: 10px;
+      font-size: 12px;
+      line-height: 1.5;
+      max-height: 100px;
+      overflow-y: auto;
+    }
+
+    .box.large {
+      min-height: 150px;
+      max-height: 200px;
+    }
+
+    .placeholder {
+      color: rgba(255,255,255,0.4);
+      font-style: italic;
+    }
+
+    .context-input {
+      width: 100%;
+      background: rgba(0,0,0,0.3);
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 8px;
+      padding: 8px;
+      color: white;
+      font-size: 11px;
+      resize: none;
+      min-height: 60px;
+    }
+
+    .context-input:focus {
+      outline: none;
+      border-color: #667eea;
+    }
+
+    .settings {
+      margin-top: 12px;
+      padding-top: 12px;
+      border-top: 1px solid rgba(255,255,255,0.1);
+    }
+
+    .setting-item {
+      margin-bottom: 10px;
+    }
+
+    .setting-item label {
+      display: block;
+      font-size: 11px;
+      color: rgba(255,255,255,0.6);
+      margin-bottom: 4px;
+    }
+
+    .setting-item input, .setting-item select {
+      width: 100%;
+      background: rgba(0,0,0,0.3);
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 6px;
+      padding: 8px;
+      color: white;
+      font-size: 12px;
+    }
+
+    .setting-item input:focus, .setting-item select:focus {
+      outline: none;
+      border-color: #667eea;
+    }
+
+    .save-btn {
+      width: 100%;
+      padding: 10px;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      border: none;
+      border-radius: 8px;
+      color: white;
+      font-weight: 600;
+      cursor: pointer;
+    }
+
+    .hint {
+      text-align: center;
+      font-size: 10px;
+      color: rgba(255,255,255,0.4);
+      margin-top: 12px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <div class="title">
+        <span>🎯</span>
+        <span>Interview Assistant</span>
+      </div>
+      <div class="status" id="status">Ready</div>
+    </div>
+
+    <div class="button-row">
+      <button class="btn ai" id="ai-btn">🤖 Answer</button>
+      <button class="btn ss" id="ss-btn">📸 Screenshot</button>
+      <button class="btn mic" id="mic-btn">🎤 Listen</button>
+    </div>
+
+    <div class="section">
+      <div class="section-header">
+        <span>🎙️ Transcription</span>
+        <button id="clear-btn">Clear</button>
+      </div>
+      <div class="box" id="transcription">
+        <span class="placeholder">Click Listen to start...</span>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-header">
+        <span>🤖 AI Response</span>
+        <button id="copy-btn">Copy</button>
+      </div>
+      <div class="box large" id="response">
+        <span class="placeholder">AI answers will appear here...</span>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-header">
+        <span>📝 Your Context</span>
+        <button id="save-context-btn">Save</button>
+      </div>
+      <textarea class="context-input" id="context" placeholder="Paste your resume/skills here..."></textarea>
+    </div>
+
+    <div class="settings" id="settings">
+      <div class="setting-item">
+        <label>Groq API Key (FREE):</label>
+        <input type="password" id="groq-key" placeholder="gsk_...">
+      </div>
+      <div class="setting-item">
+        <label>Language:</label>
+        <select id="language">
+          <option value="en">English</option>
+          <option value="hi">Hindi</option>
+          <option value="es">Spanish</option>
+          <option value="fr">French</option>
+          <option value="de">German</option>
+          <option value="zh">Chinese</option>
+          <option value="ja">Japanese</option>
+        </select>
+      </div>
+      <button class="save-btn" id="save-btn">Save Settings</button>
+    </div>
+
+    <div class="hint">
+      Cmd+Shift+A for AI Answer | Cmd+Shift+L to toggle listening
+    </div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

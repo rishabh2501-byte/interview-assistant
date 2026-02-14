@@ -1,0 +1,47 @@
+{
+  "manifest_version": 3,
+  "name": "Interview Assistant",
+  "version": "1.0.0",
+  "description": "AI-powered interview assistant with real-time transcription and answers",
+  "permissions": [
+    "activeTab",
+    "storage",
+    "tabCapture"
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "commands": {
+    "get-ai-answer": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+A",
+        "mac": "Command+Shift+A"
+      },
+      "description": "Get AI Answer"
+    },
+    "toggle-listening": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+L",
+        "mac": "Command+Shift+L"
+      },
+      "description": "Toggle Listening"
+    }
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "host_permissions": [
+    "https://api.groq.com/*",
+    "https://api.openai.com/*"
+  ]
+}
