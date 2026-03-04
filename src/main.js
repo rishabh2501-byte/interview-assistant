@@ -1,5 +1,6 @@
 const { app, BrowserWindow, ipcMain, desktopCapturer, globalShortcut, screen, systemPreferences } = require('electron');
 const path = require('path');
+const fs = require('fs');
 
 let mainWindow;
 let isVisible = true;
@@ -20,10 +21,8 @@ function createWindow() {
     resizable: true,
     minWidth: 300,
     minHeight: 400,
-    maxWidth: 600,
-    maxHeight: 900,
     hasShadow: false,
-    focusable: true,
+    type: 'panel',
     webPreferences: {
       nodeIntegration: true,
       contextIsolation: false,
@@ -32,7 +31,7 @@ function createWindow() {
   });
 
   // CRITICAL: Make window invisible to ALL screen capture methods
-  mainWindow.setContentProtection(false);
+  mainWindow.setContentProtection(true);
   
   // Set window level to float above everything
   mainWindow.setAlwaysOnTop(true, 'floating', 1);
@@ -59,21 +58,24 @@ app.whenReady().then(async () => {
 
   createWindow();
   
-  // Open DevTools for debugging
-  mainWindow.webContents.openDevTools({ mode: 'detach' });
+  // Open DevTools for debugging (uncomment if needed)
+  // mainWindow.webContents.openDevTools({ mode: 'detach' });
 
   // Ctrl+Enter for AI Answer
   globalShortcut.register('Control+Return', () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
     mainWindow.webContents.send('trigger-ai-answer');
   });
 
   // Ctrl+Shift+S for screenshot analysis
   globalShortcut.register('Control+Shift+S', () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
     mainWindow.webContents.send('trigger-screenshot');
   });
 
   // Ctrl+H to toggle visibility
   globalShortcut.register('Control+H', () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
     if (isVisible) {
       mainWindow.hide();
       isVisible = false;
@@ -85,6 +87,7 @@ app.whenReady().then(async () => {
 
   // Cmd+D (Mac) / Ctrl+D (Win) to hide/show entire window
   globalShortcut.register('CommandOrControl+D', () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
     if (isVisible) {
       mainWindow.hide();
       isVisible = false;
@@ -96,6 +99,7 @@ app.whenReady().then(async () => {
 
   // Cmd+N (Mac) / Ctrl+N (Win) to stop listening
   globalShortcut.register('CommandOrControl+N', () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
     mainWindow.webContents.send('stop-listening');
   });
 
@@ -103,27 +107,32 @@ app.whenReady().then(async () => {
   const MOVE_STEP = 30;
   
   globalShortcut.register('Control+Shift+Right', () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
     const [x, y] = mainWindow.getPosition();
     mainWindow.setPosition(x + MOVE_STEP, y);
   });
   
   globalShortcut.register('Control+Shift+Left', () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
     const [x, y] = mainWindow.getPosition();
     mainWindow.setPosition(x - MOVE_STEP, y);
   });
   
   globalShortcut.register('Control+Shift+Up', () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
     const [x, y] = mainWindow.getPosition();
     mainWindow.setPosition(x, y - MOVE_STEP);
   });
   
   globalShortcut.register('Control+Shift+Down', () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
     const [x, y] = mainWindow.getPosition();
     mainWindow.setPosition(x, y + MOVE_STEP);
   });
 
   // Auto-start listening when app loads (with delay to ensure permissions)
   setTimeout(() => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
     mainWindow.webContents.send('auto-start-capture');
   }, 2000);
 });
@@ -165,4 +174,39 @@ ipcMain.on('close-window', () => {
 ipcMain.on('move-window', (event, { x, y }) => {
   const [currentX, currentY] = mainWindow.getPosition();
   mainWindow.setPosition(currentX + x, currentY + y);
+});
+
+ipcMain.on('resize-window', (event, { width, height, x, y }) => {
+  if (width && height) {
+    mainWindow.setSize(Math.max(300, width), Math.max(400, height));
+  }
+  if (x !== undefined && y !== undefined) {
+    mainWindow.setPosition(x, y);
+  }
+});
+
+ipcMain.handle('get-window-bounds', () => {
+  return mainWindow.getBounds();
+});
+
+// PDF parsing handler - uses pdfjs-dist
+ipcMain.handle('parse-pdf', async (event, buffer) => {
+  try {
+    const pdfjsLib = require('pdfjs-dist/legacy/build/pdf.js');
+    const uint8Array = new Uint8Array(buffer);
+    const doc = await pdfjsLib.getDocument({ data: uint8Array }).promise;
+    
+    let fullText = '';
+    for (let i = 1; i <= doc.numPages; i++) {
+      const page = await doc.getPage(i);
+      const textContent = await page.getTextContent();
+      const pageText = textContent.items.map(item => item.str).join(' ');
+      fullText += pageText + '\n';
+    }
+    
+    return { success: true, text: fullText };
+  } catch (error) {
+    console.error('PDF parse error:', error);
+    return { success: false, error: error.message };
+  }
 });
