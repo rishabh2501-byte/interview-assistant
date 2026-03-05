@@ -4,6 +4,10 @@ const { ipcRenderer } = require('electron');
 let isCapturing = false;
 let audioStream = null;
 let transcriptionText = '';
+let pdfContext = localStorage.getItem('pdf_context') || '';
+
+// Conversation history for follow-up questions
+let conversationHistory = [];
 
 // API Keys
 // Groq: FREE Whisper + LLM - get key from console.groq.com
@@ -76,6 +80,58 @@ saveContextBtn.addEventListener('click', () => {
   console.log('User context saved:', userContext.length, 'chars');
 });
 
+// PDF Upload handling
+const pdfUpload = document.getElementById('pdf-upload');
+const pdfStatus = document.getElementById('pdf-status');
+
+// Show PDF status if already loaded
+if (pdfContext) {
+  pdfStatus.textContent = '✓ PDF loaded (' + pdfContext.length + ' chars)';
+  pdfStatus.classList.add('active');
+}
+
+pdfUpload.addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  
+  if (!file.name.toLowerCase().endsWith('.pdf')) {
+    pdfStatus.textContent = '✗ Please select a PDF file';
+    pdfStatus.classList.add('active', 'error');
+    return;
+  }
+  
+  pdfStatus.textContent = 'Processing PDF...';
+  pdfStatus.classList.add('active');
+  pdfStatus.classList.remove('error');
+  
+  try {
+    const arrayBuffer = await file.arrayBuffer();
+    const uint8Array = new Uint8Array(arrayBuffer);
+    const result = await ipcRenderer.invoke('parse-pdf', Array.from(uint8Array));
+    
+    if (!result.success) {
+      throw new Error(result.error);
+    }
+    
+    pdfContext = result.text.trim();
+    localStorage.setItem('pdf_context', pdfContext);
+    
+    pdfStatus.textContent = '✓ PDF loaded: ' + file.name + ' (' + pdfContext.length + ' chars)';
+    showStatus('PDF loaded!', 'success');
+    console.log('PDF context loaded:', pdfContext.length, 'chars');
+    
+    // Optionally append to user context textarea
+    if (userContextInput.value.trim() === '') {
+      userContextInput.value = pdfContext.substring(0, 5000); // First 5000 chars as preview
+    }
+  } catch (error) {
+    console.error('PDF parsing error:', error);
+    pdfStatus.textContent = '✗ Error reading PDF: ' + error.message;
+    pdfStatus.classList.add('error');
+    showStatus('PDF error', 'error');
+  }
+});
+
 // Window Controls
 minimizeBtn.addEventListener('click', () => {
   ipcRenderer.send('minimize-window');
@@ -105,13 +161,21 @@ saveApiKeyBtn.addEventListener('click', () => {
 // Clear Transcript
 clearTranscriptBtn.addEventListener('click', () => {
   transcriptionText = '';
-  transcriptionBox.innerHTML = '<p class="placeholder">Audio transcription will appear here...</p>';
+  transcriptionBox.value = '';
+});
+
+// Clear conversation history (New Topic button)
+const clearHistoryBtn = document.getElementById('clear-history');
+clearHistoryBtn.addEventListener('click', () => {
+  conversationHistory = [];
+  showStatus('Conversation cleared - ready for new topic', 'success');
+  console.log('Conversation history cleared');
 });
 
 // Copy Response
 copyResponseBtn.addEventListener('click', () => {
   const text = responseBox.innerText;
-  if (text && !text.includes('will appear here')) {
+  if (text && !text.includes('Press Ctrl+Enter')) {
     navigator.clipboard.writeText(text);
     showStatus('Copied to clipboard!', 'success');
   }
@@ -189,7 +253,7 @@ async function startCapture() {
   } catch (error) {
     console.error('Microphone error:', error);
     showStatus('Mic error: ' + error.message, 'error');
-    transcriptionBox.innerHTML = `<p class="error">Microphone error: ${error.message}</p>`;
+    transcriptionBox.value = `Microphone error: ${error.message}`;
   }
 }
 
@@ -305,7 +369,7 @@ async function transcribeWithGroq(audioBlob) {
   const hasOpenAI = apiKey && apiKey.length > 10;
   
   if (!hasGroq && !hasOpenAI) {
-    transcriptionBox.innerHTML = `<p class="error">No API key! Get FREE key from <a href="https://console.groq.com" target="_blank" style="color:#60a5fa">console.groq.com</a></p>`;
+    transcriptionBox.value = 'No API key! Get FREE key from console.groq.com';
     showStatus('No API key', 'error');
     stopCapture();
     return;
@@ -398,7 +462,7 @@ function stopCapture() {
 
 // Update transcription display
 function updateTranscriptionBox(text) {
-  transcriptionBox.innerHTML = `<p>${text}</p>`;
+  transcriptionBox.value = text;
   transcriptionBox.scrollTop = transcriptionBox.scrollHeight;
 }
 
@@ -413,12 +477,15 @@ async function generateAIAnswer() {
     return;
   }
 
-  if (!transcriptionText.trim()) {
+  // Use the textarea value (allows user edits) instead of just transcriptionText
+  const currentTranscription = transcriptionBox.value.trim();
+  
+  if (!currentTranscription) {
     showStatus('No transcription yet', 'error');
     return;
   }
 
-  responseBox.innerHTML = '<div class="loading"></div> Generating answer...';
+  responseBox.innerHTML = '<span style="color: rgba(255,255,255,0.6)">Generating answer...</span>';
   
   // Use Groq (free) or OpenAI
   const chatUrl = hasGroq ? `${GROQ_API_URL}/chat/completions` : `${OPENAI_API_URL}/chat/completions`;
@@ -426,6 +493,32 @@ async function generateAIAnswer() {
   const chatModel = hasGroq ? 'llama-3.3-70b-versatile' : 'gpt-3.5-turbo';
   
   console.log('Generating answer with:', hasGroq ? 'Groq (FREE)' : 'OpenAI');
+  
+  // Build system message with context
+  const systemMessage = {
+    role: 'system',
+    content: `You are an expert interview assistant helping a candidate. Based on the conversation/question provided, give a clear, concise, and professional answer.
+
+${pdfContext ? `CANDIDATE'S RESUME/CV (from PDF):\n${pdfContext}\n\n` : ''}${userContext ? `CANDIDATE'S ADDITIONAL CONTEXT:\n${userContext}\n\n` : ''}${(pdfContext || userContext) ? `Use this background to personalize your answers and highlight relevant experience.\n\n` : ''}GUIDELINES:
+- Be direct and to the point
+- Use bullet points for complex answers
+- Keep answers under 1000 words unless complexity requires more
+- Sound natural and confident
+- If it's a technical question, provide accurate technical details
+- When providing code examples, use markdown code blocks with the language specified
+- Reference the candidate's experience, skills, and projects from their resume when relevant
+- If this is a follow-up or counter question, consider the previous context and answers`
+  };
+  
+  // Add current question to conversation history
+  const currentQuestion = {
+    role: 'user',
+    content: `Here's what was said in the meeting/interview. Please provide a great answer to the latest question or topic:\n\n${currentTranscription}`
+  };
+  
+  // Build messages array with conversation history (keep last 10 exchanges for context)
+  const recentHistory = conversationHistory.slice(-10);
+  const messages = [systemMessage, ...recentHistory, currentQuestion];
   
   try {
     const response = await fetch(chatUrl, {
@@ -436,24 +529,7 @@ async function generateAIAnswer() {
       },
       body: JSON.stringify({
         model: chatModel,
-        messages: [
-          {
-            role: 'system',
-            content: `You are an expert interview assistant helping a candidate. Based on the conversation/question provided, give a clear, concise, and professional answer.
-
-${userContext ? `CANDIDATE'S BACKGROUND:\n${userContext}\n\nUse this background to personalize your answers and highlight relevant experience.\n\n` : ''}GUIDELINES:
-- Be direct and to the point
-- Use bullet points for complex answers
-- Keep answers under 550 words unless complexity requires more
-- Sound natural and confident
-- If it's a technical question, provide accurate technical details
-- Reference the candidate's experience when relevant`
-          },
-          {
-            role: 'user',
-            content: `Here's what was said in the meeting/interview. Please provide a great answer to the latest question or topic:\n\n${transcriptionText}`
-          }
-        ],
+        messages: messages,
         max_tokens: 500,
         temperature: 0.7
       })
@@ -469,12 +545,23 @@ ${userContext ? `CANDIDATE'S BACKGROUND:\n${userContext}\n\nUse this background 
 
     const data = await response.json();
     const answer = data.choices[0].message.content;
-    responseBox.innerHTML = `<p>${answer.replace(/\n/g, '<br>')}</p>`;
+    
+    // Store this exchange in conversation history
+    conversationHistory.push(currentQuestion);
+    conversationHistory.push({ role: 'assistant', content: answer });
+    
+    // Keep only last 20 messages to avoid token limits
+    if (conversationHistory.length > 20) {
+      conversationHistory = conversationHistory.slice(-20);
+    }
+    
+    responseBox.innerHTML = highlightImportantParts(answer);
     showStatus('✓ Answer ready!', 'success');
+    console.log('Conversation history length:', conversationHistory.length);
 
   } catch (error) {
     console.error('AI Answer error:', error);
-    responseBox.innerHTML = '<p class="error">Error generating answer. Check API key.</p>';
+    responseBox.innerHTML = '<span style="color: #f87171">Error generating answer. Check API key.</span>';
     showStatus('Error', 'error');
   }
 }
@@ -486,13 +573,13 @@ async function captureAndAnalyzeScreenshot() {
   
   if (!hasOpenAI) {
     // Vision requires OpenAI - Groq doesn't support vision yet
-    responseBox.innerHTML = '<p class="error">Screenshot analysis requires OpenAI API key (Groq doesn\'t support vision yet)</p>';
+    responseBox.innerHTML = '<span style="color: #f87171">Screenshot analysis requires OpenAI API key (Groq doesn\'t support vision yet)</span>';
     showStatus('Need OpenAI key for vision', 'error');
     settingsPanel.classList.add('active');
     return;
   }
 
-  responseBox.innerHTML = '<div class="loading"></div> Capturing screen...';
+  responseBox.innerHTML = '<span style="color: rgba(255,255,255,0.6)">Capturing screen...</span>';
   console.log('Starting screenshot capture...');
 
   try {
@@ -574,21 +661,81 @@ async function captureAndAnalyzeScreenshot() {
 
     if (!response.ok) {
       // If gpt-4o fails, show the error
-      responseBox.innerHTML = `<p class="error">API Error: ${response.status}. Vision model may not be available on this API.</p>`;
+      responseBox.innerHTML = `<span style="color: #f87171">API Error: ${response.status}. Vision model may not be available on this API.</span>`;
       showStatus('Vision not available', 'error');
       return;
     }
 
     const data = JSON.parse(responseText);
     const analysis = data.choices[0].message.content;
-    responseBox.innerHTML = `<p>${analysis.replace(/\n/g, '<br>')}</p>`;
+    responseBox.innerHTML = highlightImportantParts(analysis);
     showStatus('Screenshot analyzed!', 'success');
 
   } catch (error) {
     console.error('Screenshot analysis error:', error);
-    responseBox.innerHTML = '<p class="placeholder">Error analyzing screenshot. Check permissions.</p>';
+    responseBox.innerHTML = '<span style="color: #f87171">Error analyzing screenshot. Check permissions.</span>';
     showStatus('Error analyzing screenshot', 'error');
   }
+}
+
+// Highlight important parts of AI response
+function highlightImportantParts(text) {
+  // First, extract and preserve code blocks
+  const codeBlocks = [];
+  let processedText = text.replace(/```(\w*)\n?([\s\S]*?)```/g, (match, lang, code) => {
+    const index = codeBlocks.length;
+    codeBlocks.push({ lang: lang || 'code', code: code.trim() });
+    return `__CODE_BLOCK_${index}__`;
+  });
+  
+  // Convert newlines to <br> for HTML display
+  let html = processedText.replace(/\n/g, '<br>');
+  
+  // Highlight inline code with backticks
+  html = html.replace(/`([^`]+)`/g, '<code class="inline-code">$1</code>');
+  
+  // Highlight text in **bold** markers (convert to highlighted spans)
+  html = html.replace(/\*\*([^*]+)\*\*/g, '<span class="highlight">$1</span>');
+  
+  // Highlight bullet point key terms (text before colon in bullet points)
+  html = html.replace(/(<br>[-•]\s*)([^:]+):/g, '$1<span class="key-point">$2</span>:');
+  
+  // Highlight numbered list key terms
+  html = html.replace(/(<br>\d+\.\s*)([^:]+):/g, '$1<span class="key-point">$2</span>:');
+  
+  // Highlight common important keywords/phrases
+  const importantTerms = [
+    'key point', 'important', 'critical', 'essential', 'remember',
+    'note that', 'keep in mind', 'crucial', 'significant', 'main',
+    'primary', 'fundamental', 'core', 'vital', 'notably'
+  ];
+  
+  importantTerms.forEach(term => {
+    const regex = new RegExp(`\\b(${term})\\b`, 'gi');
+    html = html.replace(regex, '<span class="highlight">$1</span>');
+  });
+  
+  // Restore code blocks with proper formatting
+  codeBlocks.forEach((block, index) => {
+    const codeHtml = `
+      <div class="code-block">
+        <div class="code-header">
+          <span class="code-lang">${block.lang.toUpperCase()}</span>
+        </div>
+        <pre class="code-content"><code>${escapeHtml(block.code)}</code></pre>
+      </div>
+    `;
+    html = html.replace(`__CODE_BLOCK_${index}__`, codeHtml);
+  });
+  
+  return html;
+}
+
+// Escape HTML special characters for code display
+function escapeHtml(text) {
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML;
 }
 
 // Show status message
@@ -621,24 +768,118 @@ function showStatus(message, type) {
   }
 }
 
-// Draggable window (backup for non-native drag)
+// Window drag and resize state
 let isDragging = false;
+let isResizing = false;
 let dragStartX, dragStartY;
+let resizeDirection = null;
+let initialBounds = null;
+let initialMouseX, initialMouseY;
 
+const RESIZE_MARGIN = 12; // pixels from edge to trigger resize
+
+// Detect resize direction based on cursor position
+function getResizeDirection(e) {
+  const w = window.innerWidth;
+  const h = window.innerHeight;
+  const x = e.clientX;
+  const y = e.clientY;
+  
+  const onLeft = x < RESIZE_MARGIN;
+  const onRight = x > w - RESIZE_MARGIN;
+  const onTop = y < RESIZE_MARGIN;
+  const onBottom = y > h - RESIZE_MARGIN;
+  
+  if (onTop && onLeft) return 'nw';
+  if (onTop && onRight) return 'ne';
+  if (onBottom && onLeft) return 'sw';
+  if (onBottom && onRight) return 'se';
+  if (onTop) return 'n';
+  if (onBottom) return 's';
+  if (onLeft) return 'w';
+  if (onRight) return 'e';
+  return null;
+}
+
+// Get cursor style for resize direction
+function getResizeCursor(dir) {
+  const cursors = {
+    'n': 'ns-resize', 's': 'ns-resize',
+    'e': 'ew-resize', 'w': 'ew-resize',
+    'ne': 'nesw-resize', 'sw': 'nesw-resize',
+    'nw': 'nwse-resize', 'se': 'nwse-resize'
+  };
+  return cursors[dir] || 'default';
+}
+
+// Drag handle for moving window
 document.getElementById('drag-handle').addEventListener('mousedown', (e) => {
   if (e.target.classList.contains('control-btn')) return;
+  const dir = getResizeDirection(e);
+  if (dir) return; // Don't drag if on resize edge
   isDragging = true;
   dragStartX = e.clientX;
   dragStartY = e.clientY;
 });
 
-document.addEventListener('mousemove', (e) => {
-  if (!isDragging) return;
-  const deltaX = e.clientX - dragStartX;
-  const deltaY = e.clientY - dragStartY;
-  ipcRenderer.send('move-window', { x: deltaX, y: deltaY });
+// Global mousedown for resize
+document.addEventListener('mousedown', async (e) => {
+  const dir = getResizeDirection(e);
+  if (dir) {
+    isResizing = true;
+    resizeDirection = dir;
+    initialMouseX = e.screenX;
+    initialMouseY = e.screenY;
+    initialBounds = await ipcRenderer.invoke('get-window-bounds');
+    e.preventDefault();
+    e.stopPropagation();
+  }
 });
 
+// Global mousemove for drag and resize
+document.addEventListener('mousemove', (e) => {
+  // Handle resize
+  if (isResizing && initialBounds) {
+    const deltaX = e.screenX - initialMouseX;
+    const deltaY = e.screenY - initialMouseY;
+    
+    let newWidth = initialBounds.width;
+    let newHeight = initialBounds.height;
+    let newX = initialBounds.x;
+    let newY = initialBounds.y;
+    
+    if (resizeDirection.includes('e')) newWidth = initialBounds.width + deltaX;
+    if (resizeDirection.includes('w')) {
+      newWidth = initialBounds.width - deltaX;
+      newX = initialBounds.x + deltaX;
+    }
+    if (resizeDirection.includes('s')) newHeight = initialBounds.height + deltaY;
+    if (resizeDirection.includes('n')) {
+      newHeight = initialBounds.height - deltaY;
+      newY = initialBounds.y + deltaY;
+    }
+    
+    ipcRenderer.send('resize-window', { width: newWidth, height: newHeight, x: newX, y: newY });
+    return;
+  }
+  
+  // Handle drag
+  if (isDragging) {
+    const deltaX = e.clientX - dragStartX;
+    const deltaY = e.clientY - dragStartY;
+    ipcRenderer.send('move-window', { x: deltaX, y: deltaY });
+    return;
+  }
+  
+  // Update cursor based on position
+  const dir = getResizeDirection(e);
+  document.body.style.cursor = dir ? getResizeCursor(dir) : 'default';
+});
+
+// Global mouseup
 document.addEventListener('mouseup', () => {
   isDragging = false;
+  isResizing = false;
+  resizeDirection = null;
+  initialBounds = null;
 });

@@ -51,29 +51,35 @@
         <span>🎙️ Transcription</span>
         <button class="clear-btn" id="clear-transcript">Clear</button>
       </div>
-      <div class="transcription-box" id="transcription-box">
-        <p class="placeholder">Listening...</p>
-      </div>
+      <textarea class="transcription-box" id="transcription-box" placeholder="Listening..."></textarea>
     </div>
 
     <!-- AI Response Area (large) -->
     <div class="response-section-large">
       <div class="section-header">
         <span>🤖 AI Response</span>
-        <button class="copy-btn" id="copy-response">Copy</button>
+        <div class="response-actions">
+          <button class="clear-btn" id="clear-history" title="Clear conversation history">New Topic</button>
+          <button class="copy-btn" id="copy-response">Copy</button>
+        </div>
       </div>
-      <div class="response-box-large" id="response-box">
-        <p class="placeholder">Press Ctrl+Enter for AI answer...</p>
-      </div>
+      <div class="response-box-large" id="response-box" contenteditable="true" data-placeholder="Press Ctrl+Enter for AI answer..."></div>
     </div>
 
     <!-- Resume/Context Section -->
     <div class="context-section">
       <div class="section-header">
         <span>📝 Your Context</span>
-        <button class="save-btn-small" id="save-context">Save</button>
+        <div class="context-actions">
+          <label class="pdf-upload-btn" id="pdf-upload-label" title="Upload Resume PDF">
+            📄 PDF
+            <input type="file" id="pdf-upload" accept=".pdf" style="display: none;">
+          </label>
+          <button class="save-btn-small" id="save-context">Save</button>
+        </div>
       </div>
-      <textarea id="user-context" placeholder="Paste your resume, skills, experience here. AI will use this to personalize answers..."></textarea>
+      <div class="pdf-status" id="pdf-status"></div>
+      <textarea id="user-context" placeholder="Paste your resume, skills, experience here or upload a PDF. AI will use this to personalize answers..."></textarea>
     </div>
 
     <!-- Settings Panel -->

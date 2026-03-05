@@ -10,14 +10,18 @@
     "build:win": "electron-builder --win",
     "dist": "electron-builder"
   },
-  "keywords": ["interview", "assistant", "meeting", "ai"],
+  "keywords": [
+    "interview",
+    "assistant",
+    "meeting",
+    "ai"
+  ],
   "author": "Interview Assistant",
   "license": "MIT",
   "devDependencies": {
     "electron": "^28.0.0",
     "electron-builder": "^24.9.1"
   },
-  "dependencies": {},
   "build": {
     "appId": "com.interview.assistant",
     "productName": "Interview Assistant",
@@ -32,7 +36,10 @@
       "target": [
         {
           "target": "dmg",
-          "arch": ["x64", "arm64"]
+          "arch": [
+            "x64",
+            "arm64"
+          ]
         }
       ],
       "icon": "build/icon.icns",
@@ -45,7 +52,9 @@
       "target": [
         {
           "target": "nsis",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         }
       ],
       "icon": "build/icon.ico"
@@ -56,5 +65,8 @@
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true
     }
+  },
+  "dependencies": {
+    "pdfjs-dist": "^3.11.174"
   }
 }
