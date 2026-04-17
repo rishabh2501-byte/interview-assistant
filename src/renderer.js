@@ -21,8 +21,9 @@ let groqApiKey = localStorage.getItem('groq_api_key') || '';
 let apiKey = localStorage.getItem('openai_api_key') || '';
 let ollamaEnabled = localStorage.getItem('ollama_enabled') === 'true';
 let ollamaUrl = localStorage.getItem('ollama_url') || 'http://localhost:11434/v1';
-let ollamaChatModel = localStorage.getItem('ollama_chat_model') || 'llama3.2';
+let ollamaChatModel = localStorage.getItem('ollama_chat_model') || 'mistral';
 let ollamaVisionModel = localStorage.getItem('ollama_vision_model') || 'llava';
+let useLocalWhisper = localStorage.getItem('use_local_whisper') === 'true';
 
 // API Configuration
 const GROQ_API_URL = 'https://api.groq.com/openai/v1';
@@ -76,6 +77,10 @@ if (userContext) {
 if (ollamaEnabledCheckbox) {
   ollamaEnabledCheckbox.checked = ollamaEnabled;
 }
+const localWhisperCheckbox = document.getElementById('local-whisper-enabled');
+if (localWhisperCheckbox) {
+  localWhisperCheckbox.checked = useLocalWhisper;
+}
 if (ollamaUrlInput) {
   ollamaUrlInput.value = ollamaUrl;
 }
@@ -98,6 +103,42 @@ console.log('Interview Assistant initialized');
 console.log('API Key set:', apiKey ? 'Yes' : 'No');
 console.log('Groq Key set:', groqApiKey ? 'Yes' : 'No (get free key from console.groq.com)');
 console.log('User context set:', userContext ? 'Yes (' + userContext.length + ' chars)' : 'No');
+
+// Auto-detect Ollama on startup and enable it if running
+async function autoDetectOllama() {
+  try {
+    const result = await ipcRenderer.invoke('check-ollama');
+    if (!result.running) return;
+
+    // Pick best available chat model
+    const preferred = ['mistral', 'llama3.2', 'llama3', 'llama2', 'phi3', 'gemma'];
+    const bestChat = preferred.find(m => result.models.some(n => n.startsWith(m)))
+      || result.models.find(m => !m.includes('llava') && !m.includes('vision'));
+
+    const bestVision = result.models.find(m => m.includes('llava') || m.includes('vision'))
+      || ollamaVisionModel;
+
+    if (bestChat) {
+      ollamaEnabled = true;
+      ollamaChatModel = bestChat.split(':')[0]; // strip tag like :latest
+      if (bestVision) ollamaVisionModel = bestVision.split(':')[0];
+
+      localStorage.setItem('ollama_enabled', 'true');
+      localStorage.setItem('ollama_chat_model', ollamaChatModel);
+      localStorage.setItem('ollama_vision_model', ollamaVisionModel);
+
+      if (ollamaEnabledCheckbox) ollamaEnabledCheckbox.checked = true;
+      if (ollamaChatModelInput) ollamaChatModelInput.value = ollamaChatModel;
+      if (ollamaVisionModelInput) ollamaVisionModelInput.value = ollamaVisionModel;
+
+      showStatus(`Ollama ready — ${ollamaChatModel}`, 'success');
+      console.log('Auto-enabled Ollama:', ollamaChatModel, '| Vision:', ollamaVisionModel);
+    }
+  } catch (e) {
+    console.log('Ollama not detected:', e.message);
+  }
+}
+autoDetectOllama();
 
 // Save context button
 saveContextBtn.addEventListener('click', () => {
@@ -179,14 +220,16 @@ saveApiKeyBtn.addEventListener('click', () => {
   groqApiKey = groqKeyInput.value.trim();
   ollamaEnabled = ollamaEnabledCheckbox ? ollamaEnabledCheckbox.checked : false;
   ollamaUrl = (ollamaUrlInput ? ollamaUrlInput.value.trim() : '') || 'http://localhost:11434/v1';
-  ollamaChatModel = (ollamaChatModelInput ? ollamaChatModelInput.value.trim() : '') || 'llama3.2';
+  ollamaChatModel = (ollamaChatModelInput ? ollamaChatModelInput.value.trim() : '') || 'mistral';
   ollamaVisionModel = (ollamaVisionModelInput ? ollamaVisionModelInput.value.trim() : '') || 'llava';
+  useLocalWhisper = localWhisperCheckbox ? localWhisperCheckbox.checked : false;
   localStorage.setItem('openai_api_key', apiKey);
   localStorage.setItem('groq_api_key', groqApiKey);
   localStorage.setItem('ollama_enabled', ollamaEnabled);
   localStorage.setItem('ollama_url', ollamaUrl);
   localStorage.setItem('ollama_chat_model', ollamaChatModel);
   localStorage.setItem('ollama_vision_model', ollamaVisionModel);
+  localStorage.setItem('use_local_whisper', useLocalWhisper);
   showStatus('Settings saved!', 'success');
   settingsPanel.classList.remove('active');
   console.log('API Key saved:', apiKey ? 'Yes' : 'No');
@@ -432,14 +475,49 @@ function recordAndTranscribe() {
 // Process audio blob with queue handling
 async function processAudioBlob(blob) {
   isTranscribing = true;
-  await transcribeWithGroq(blob);
+  if (useLocalWhisper) {
+    await transcribeLocally(blob);
+  } else {
+    await transcribeWithGroq(blob);
+  }
   isTranscribing = false;
-  
+
   // Process pending blob if any
   if (pendingBlob) {
     const nextBlob = pendingBlob;
     pendingBlob = null;
     await processAudioBlob(nextBlob);
+  }
+}
+
+// Transcribe using local nodejs-whisper (no API key needed)
+async function transcribeLocally(audioBlob) {
+  try {
+    showStatus('Transcribing locally...', 'processing');
+    const arrayBuffer = await audioBlob.arrayBuffer();
+    const result = await ipcRenderer.invoke('transcribe-local', Array.from(new Uint8Array(arrayBuffer)));
+    if (!result.success) {
+      console.error('Local whisper error:', result.error);
+      showStatus('Whisper error', 'error');
+      return;
+    }
+    const text = (result.text || '').trim();
+    if (!text || text.length < 4) return;
+
+    const hallucinationPatterns = [
+      'thank you', 'thanks for watching', 'subscribe', 'background sound',
+      'background noise', 'music playing', 'applause', '[ silence ]', '[silence]',
+      'the end', 'transcribe', '(music)', '(applause)'
+    ];
+    const lower = text.toLowerCase();
+    if (hallucinationPatterns.some(p => lower.includes(p))) return;
+
+    transcriptionText += ' ' + text;
+    updateTranscriptionBox(transcriptionText.trim());
+    showStatus('✓ Transcribed (local)', 'success');
+  } catch (error) {
+    console.error('Local transcription error:', error);
+    showStatus('Local whisper failed', 'error');
   }
 }
 
@@ -449,8 +527,8 @@ async function transcribeWithGroq(audioBlob) {
   const hasOpenAI = apiKey && apiKey.length > 10;
   
   if (!hasGroq && !hasOpenAI) {
-    transcriptionBox.value = 'No API key! Get FREE key from console.groq.com';
-    showStatus('No API key', 'error');
+    transcriptionBox.value = 'No transcription API key! Enable Local Whisper in Settings (free) or get a free key from console.groq.com';
+    showStatus('No transcription key', 'error');
     stopCapture();
     return;
   }

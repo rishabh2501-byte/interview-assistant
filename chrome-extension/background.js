@@ -1,4 +1,4 @@
-// Background service worker for Chrome extension
+yes// Background service worker for Chrome extension
 
 // Handle keyboard shortcuts
 chrome.commands.onCommand.addListener((command) => {

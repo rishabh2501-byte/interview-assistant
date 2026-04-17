@@ -1,9 +1,22 @@
 const { app, BrowserWindow, ipcMain, desktopCapturer, globalShortcut, screen, systemPreferences } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const { exec, spawn } = require('child_process');
+const os = require('os');
 
 let mainWindow;
 let isVisible = true;
+let ollamaProcess = null;
+
+// Start Ollama server if not already running
+function startOllama() {
+  exec('curl -s http://localhost:11434/api/tags', (err, stdout) => {
+    if (!err && stdout) return; // already running
+    console.log('Starting Ollama...');
+    ollamaProcess = spawn('ollama', ['serve'], { detached: true, stdio: 'ignore' });
+    ollamaProcess.unref();
+  });
+}
 
 function createWindow() {
   const primaryDisplay = screen.getPrimaryDisplay();
@@ -43,6 +56,7 @@ function createWindow() {
 }
 
 app.whenReady().then(async () => {
+  startOllama();
   // Request microphone permission on macOS
   if (process.platform === 'darwin') {
     const micStatus = systemPreferences.getMediaAccessStatus('microphone');
@@ -186,6 +200,44 @@ ipcMain.on('resize-window', (event, { width, height, x, y }) => {
 
 ipcMain.handle('get-window-bounds', () => {
   return mainWindow.getBounds();
+});
+
+// Check if Ollama is running and which models are available
+ipcMain.handle('check-ollama', async () => {
+  return new Promise((resolve) => {
+    exec('curl -s http://localhost:11434/api/tags', (err, stdout) => {
+      if (err || !stdout) return resolve({ running: false, models: [] });
+      try {
+        const data = JSON.parse(stdout);
+        const models = (data.models || []).map(m => m.name);
+        resolve({ running: true, models });
+      } catch {
+        resolve({ running: false, models: [] });
+      }
+    });
+  });
+});
+
+// Local Whisper transcription via nodejs-whisper
+ipcMain.handle('transcribe-local', async (event, audioBytes) => {
+  const tmpInput = path.join(os.tmpdir(), `whisper_in_${Date.now()}.webm`);
+  fs.writeFileSync(tmpInput, Buffer.from(audioBytes));
+  try {
+    const { nodewhisper } = require('nodejs-whisper');
+    const result = await nodewhisper(tmpInput, {
+      modelName: 'base',
+      autoDownloadModelName: 'base',
+      removeWavFileAfterTranscription: true,
+      withCuda: false,
+      logger: { debug: () => {}, error: console.error },
+      whisperOptions: { outputInText: true, outputInJson: false, wordTimestamps: false }
+    });
+    fs.unlinkSync(tmpInput);
+    return { success: true, text: (result || '').trim() };
+  } catch (err) {
+    if (fs.existsSync(tmpInput)) fs.unlinkSync(tmpInput);
+    return { success: false, error: err.message };
+  }
 });
 
 // PDF parsing handler - uses pdfjs-dist
