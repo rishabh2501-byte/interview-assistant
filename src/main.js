@@ -4,6 +4,9 @@ const fs = require('fs');
 const { exec, spawn } = require('child_process');
 const os = require('os');
 
+// Prevent Chromium's window capture feature from bypassing content protection
+app.commandLine.appendSwitch('disable-features', 'WindowCaptureMacV2');
+
 let mainWindow;
 let isVisible = true;
 let ollamaProcess = null;
@@ -35,7 +38,7 @@ function createWindow() {
     minWidth: 300,
     minHeight: 400,
     hasShadow: false,
-    type: 'panel',
+    show: false,
     webPreferences: {
       nodeIntegration: true,
       contextIsolation: false,
@@ -43,15 +46,18 @@ function createWindow() {
     }
   });
 
-  // CRITICAL: Make window invisible to ALL screen capture methods
+  // Set content protection BEFORE showing — prevents Zoom/screen share from capturing this window
   mainWindow.setContentProtection(true);
-  
-  // Set window level to float above everything
-  mainWindow.setAlwaysOnTop(true, 'floating', 1);
+  mainWindow.setAlwaysOnTop(true, 'screen-saver', 1);
   mainWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
 
-
   mainWindow.loadFile(path.join(__dirname, 'index.html'));
+
+  mainWindow.once('ready-to-show', () => {
+    // Re-apply content protection right before showing (some macOS versions need this)
+    mainWindow.setContentProtection(true);
+    mainWindow.show();
+  });
 
 }
 
@@ -101,6 +107,12 @@ app.whenReady().then(async () => {
 
   // Cmd+N → stop listening
   globalShortcut.register('Command+N', () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    mainWindow.webContents.send('stop-listening');
+  });
+
+  // Cmd+Space → stop listening (quick toggle off)
+  globalShortcut.register('Command+Space', () => {
     if (!mainWindow || mainWindow.isDestroyed()) return;
     mainWindow.webContents.send('stop-listening');
   });
@@ -200,6 +212,12 @@ ipcMain.on('resize-window', (event, { width, height, x, y }) => {
 
 ipcMain.handle('get-window-bounds', () => {
   return mainWindow.getBounds();
+});
+
+ipcMain.on('set-opacity', (event, value) => {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.setOpacity(Math.min(1, Math.max(0.2, value)));
+  }
 });
 
 // Check if Ollama is running and which models are available

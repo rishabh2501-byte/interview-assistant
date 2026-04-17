@@ -9,6 +9,9 @@ let pdfContext = localStorage.getItem('pdf_context') || '';
 // Conversation history for follow-up questions
 let conversationHistory = [];
 
+// Rolling transcription context — last 5 things sent to AI (so AI knows interview flow)
+let transcriptionHistory = [];
+
 // Response display history (back/forward navigation)
 let responseHistory = [];
 let responseHistoryIndex = -1;
@@ -64,6 +67,81 @@ let userContext = localStorage.getItem('user_context') || '';
 const languageSelect = document.getElementById('language-select');
 let selectedLanguage = localStorage.getItem('selected_language') || 'en';
 
+// Role selector
+const roleSelect = document.getElementById('role-select');
+let selectedRole = localStorage.getItem('selected_role') || 'general';
+
+const ROLE_DATA = {
+  general: {
+    title: 'IT Professional',
+    stack: 'General software engineering, algorithms, data structures, system design, OOP, REST APIs, Git, Agile/Scrum, problem-solving.'
+  },
+  frontend: {
+    title: 'Frontend Developer',
+    stack: 'React, Vue, Angular, TypeScript, JavaScript (ES6+), HTML5, CSS3, Tailwind CSS, Redux/Zustand, Next.js, Vite, Webpack, Jest, Cypress, Figma, responsive design, accessibility (WCAG), Web Performance, PWA, REST APIs.'
+  },
+  backend: {
+    title: 'Backend Developer',
+    stack: 'Node.js, Python, Java, Go, Spring Boot, Express, FastAPI, Django, REST APIs, GraphQL, gRPC, PostgreSQL, MySQL, MongoDB, Redis, RabbitMQ/Kafka, Docker, microservices, authentication (JWT, OAuth2), caching strategies, SOLID principles.'
+  },
+  fullstack: {
+    title: 'Full Stack Developer',
+    stack: 'React/Next.js, Node.js/Express, TypeScript, PostgreSQL/MongoDB, REST APIs, GraphQL, Docker, CI/CD, Redis, Tailwind CSS, Git, AWS basics, JWT authentication, microservices, deployment strategies.'
+  },
+  mobile: {
+    title: 'Mobile Developer',
+    stack: 'React Native, Flutter, Swift (iOS), Kotlin (Android), Xcode, Android Studio, App Store/Play Store deployment, push notifications, offline-first design, mobile performance, navigation patterns, native modules, Firebase.'
+  },
+  devops: {
+    title: 'DevOps Engineer',
+    stack: 'Docker, Kubernetes (K8s), Helm, CI/CD (GitHub Actions, Jenkins, GitLab CI), Terraform, Ansible, AWS/GCP/Azure, Linux, Bash scripting, Prometheus, Grafana, ELK Stack, Nginx, load balancing, blue-green/canary deployments, Infrastructure as Code, secrets management (Vault).'
+  },
+  cloud: {
+    title: 'Cloud Engineer / Architect',
+    stack: 'AWS (EC2, S3, Lambda, RDS, EKS, CloudFormation, IAM), GCP (GKE, BigQuery, Cloud Run), Azure, Terraform, serverless architecture, microservices, CDN, VPC/networking, cost optimization, multi-cloud strategy, cloud security, SLAs.'
+  },
+  sre: {
+    title: 'SRE / Platform Engineer',
+    stack: 'SLOs/SLIs/SLAs, error budgets, incident management, chaos engineering (Chaos Monkey), Prometheus, Grafana, PagerDuty, distributed tracing (Jaeger/Zipkin), Kubernetes, capacity planning, post-mortems, observability, toil reduction, on-call best practices.'
+  },
+  data_engineer: {
+    title: 'Data Engineer',
+    stack: 'Python, Apache Spark, Apache Kafka, Apache Airflow, dbt, Snowflake, Databricks, AWS Glue/Redshift, BigQuery, ETL/ELT pipelines, SQL, data modeling (star/snowflake schema), data lakes, Parquet/Avro, streaming vs batch processing, data quality, orchestration.'
+  },
+  data_scientist: {
+    title: 'Data Scientist / ML Engineer',
+    stack: 'Python, TensorFlow, PyTorch, scikit-learn, pandas, NumPy, Jupyter, MLflow, feature engineering, model evaluation, A/B testing, SQL, data visualization (Matplotlib, Seaborn, Plotly), NLP, computer vision, MLOps, model deployment (FastAPI, Docker), Hugging Face, LLMs.'
+  },
+  qa: {
+    title: 'QA / SDET',
+    stack: 'Selenium, Cypress, Playwright, JUnit, TestNG, pytest, API testing (Postman, REST Assured), performance testing (JMeter, k6), BDD (Cucumber), CI integration, test planning, regression testing, mobile testing (Appium), test automation frameworks, bug tracking (Jira).'
+  },
+  security: {
+    title: 'Security Engineer',
+    stack: 'OWASP Top 10, penetration testing, vulnerability assessment, SIEM (Splunk, ELK), network security, cryptography, zero-trust architecture, IAM, AWS/cloud security, compliance (SOC 2, ISO 27001), secure SDLC, threat modeling, incident response, Burp Suite, Nmap.'
+  },
+  system_design: {
+    title: 'System Design / Solutions Architect',
+    stack: 'Distributed systems, CAP theorem, consistency models, load balancing, horizontal vs vertical scaling, caching (Redis, CDN), message queues (Kafka, RabbitMQ, SQS), database sharding, replication, microservices vs monolith, API gateway, rate limiting, idempotency, event-driven architecture, real-time systems.'
+  },
+  dba: {
+    title: 'Database Administrator',
+    stack: 'PostgreSQL, MySQL, Oracle, MongoDB, Redis, Cassandra, query optimization, indexing strategies, execution plans, replication, sharding, backup/recovery, ACID transactions, connection pooling, database migrations, performance tuning, stored procedures, partitioning.'
+  },
+  embedded: {
+    title: 'Embedded / Systems Engineer',
+    stack: 'C, C++, RTOS (FreeRTOS, Zephyr), Linux kernel, device drivers, memory management, pointers, bit manipulation, UART/SPI/I2C protocols, ARM architecture, debugging (JTAG, GDB), real-time constraints, bootloaders, hardware-software integration, CMake, cross-compilation.'
+  }
+};
+
+if (roleSelect) {
+  roleSelect.value = selectedRole;
+  roleSelect.addEventListener('change', () => {
+    selectedRole = roleSelect.value;
+    localStorage.setItem('selected_role', selectedRole);
+  });
+}
+
 // Initialize
 if (apiKey) {
   apiKeyInput.value = apiKey;
@@ -98,6 +176,21 @@ if (languageSelect) {
     console.log('Language set to:', selectedLanguage);
   });
 }
+
+// Opacity slider
+const opacitySlider = document.getElementById('opacity-slider');
+const opacityValue = document.getElementById('opacity-value');
+const savedOpacity = localStorage.getItem('window_opacity') || '100';
+opacitySlider.value = savedOpacity;
+opacityValue.textContent = savedOpacity + '%';
+ipcRenderer.send('set-opacity', parseInt(savedOpacity) / 100);
+
+opacitySlider.addEventListener('input', () => {
+  const val = opacitySlider.value;
+  opacityValue.textContent = val + '%';
+  ipcRenderer.send('set-opacity', parseInt(val) / 100);
+  localStorage.setItem('window_opacity', val);
+});
 
 console.log('Interview Assistant initialized');
 console.log('API Key set:', apiKey ? 'Yes' : 'No');
@@ -247,6 +340,7 @@ clearTranscriptBtn.addEventListener('click', () => {
 const clearHistoryBtn = document.getElementById('clear-history');
 clearHistoryBtn.addEventListener('click', () => {
   conversationHistory = [];
+  transcriptionHistory = [];
   showStatus('Conversation cleared - ready for new topic', 'success');
   console.log('Conversation history cleared');
 });
@@ -666,30 +760,52 @@ async function generateAIAnswer() {
 
   console.log('Generating answer with:', providerName);
   
-  // Build system message with context
+  // Build system message with role-aware, human-sounding prompt
+  const role = ROLE_DATA[selectedRole] || ROLE_DATA['general'];
   const systemMessage = {
     role: 'system',
-    content: `You are an expert interview assistant helping a candidate. Based on the conversation/question provided, give a clear, concise, and professional answer.
+    content: `You are roleplaying as the candidate in a job interview for the role of ${role.title}. Answer every question exactly as a real, experienced ${role.title} would speak — first person, confident, natural, and conversational. Your answers must sound like a human professional talking, NOT like an AI assistant writing a response.
 
-${pdfContext ? `CANDIDATE'S RESUME/CV (from PDF):\n${pdfContext}\n\n` : ''}${userContext ? `CANDIDATE'S ADDITIONAL CONTEXT:\n${userContext}\n\n` : ''}${(pdfContext || userContext) ? `Use this background to personalize your answers and highlight relevant experience.\n\n` : ''}GUIDELINES:
-- Be direct and to the point
-- Use bullet points for complex answers
-- Keep answers under 1000 words unless complexity requires more
-- Sound natural and confident
-- If it's a technical question, provide accurate technical details
-- When providing code examples, use markdown code blocks with the language specified
-- Reference the candidate's experience, skills, and projects from their resume when relevant
-- If this is a follow-up or counter question, consider the previous context and answers`
+ROLE & TECH STACK YOU KNOW DEEPLY:
+${role.stack}
+
+${pdfContext ? `YOUR RESUME / BACKGROUND (use this to personalize every answer):\n${pdfContext}\n` : ''}${userContext ? `ADDITIONAL CONTEXT ABOUT YOU:\n${userContext}\n` : ''}
+HOW TO ANSWER — STRICT RULES:
+- Speak in first person always: "I've worked with...", "In my experience...", "I usually...", "What I do is..."
+- Sound like you're talking in a real conversation — natural pauses, direct points, no fluff
+- NEVER start with "Certainly!", "Great question!", "Absolutely!", "Sure!" or any AI filler phrase
+- NEVER say "As an AI" or anything that sounds like a chatbot wrote it
+- Give concrete examples from your experience: "On my last project, we had this exact problem and I..."
+- Be opinionated and specific — real engineers have opinions: "I prefer X over Y because..."
+- For technical questions: give the actual answer first, then briefly explain the why
+- For behavioural questions: use a real story format — situation, what you did, outcome
+- Use industry terms naturally, like you actually use them at work
+- Keep answers focused — 3-5 sentences for simple questions, structured bullets for complex ones
+- If there's a follow-up or pushback, defend your answer confidently but professionally
+- When providing code, write it cleanly and explain it like you're in a code review`
   };
-  
-  // Add current question to conversation history
+
+  // Save this transcription to rolling history (keep last 5)
+  transcriptionHistory.push(currentTranscription);
+  if (transcriptionHistory.length > 5) transcriptionHistory.shift();
+
+  // Build context block from past transcriptions so AI knows the interview flow
+  const pastContext = transcriptionHistory.length > 1
+    ? transcriptionHistory
+        .slice(0, -1) // all except current
+        .map((t, i) => `[Exchange ${i + 1}]: ${t}`)
+        .join('\n\n')
+    : null;
+
   const currentQuestion = {
     role: 'user',
-    content: `Here's what was said in the meeting/interview. Please provide a great answer to the latest question or topic:\n\n${currentTranscription}`
+    content: pastContext
+      ? `INTERVIEW CONVERSATION SO FAR (last ${transcriptionHistory.length - 1} exchanges for context):\n${pastContext}\n\n---\nCURRENT QUESTION / LATEST CONVERSATION:\n${currentTranscription}`
+      : `Interview question or conversation (answer as the candidate):\n\n${currentTranscription}`
   };
-  
-  // Build messages array with conversation history (keep last 10 exchanges for context)
-  const recentHistory = conversationHistory.slice(-10);
+
+  // Keep last 7 exchanges (14 messages) for full context memory
+  const recentHistory = conversationHistory.slice(-14);
   const messages = [systemMessage, ...recentHistory, currentQuestion];
   
   try {
@@ -702,8 +818,8 @@ ${pdfContext ? `CANDIDATE'S RESUME/CV (from PDF):\n${pdfContext}\n\n` : ''}${use
       body: JSON.stringify({
         model: chatModel,
         messages: messages,
-        max_tokens: 500,
-        temperature: 0.7
+        max_tokens: 800,
+        temperature: 0.75
       })
     });
 
@@ -722,9 +838,9 @@ ${pdfContext ? `CANDIDATE'S RESUME/CV (from PDF):\n${pdfContext}\n\n` : ''}${use
     conversationHistory.push(currentQuestion);
     conversationHistory.push({ role: 'assistant', content: answer });
     
-    // Keep only last 20 messages to avoid token limits
-    if (conversationHistory.length > 20) {
-      conversationHistory = conversationHistory.slice(-20);
+    // Keep last 14 messages (7 full exchanges) for context memory
+    if (conversationHistory.length > 14) {
+      conversationHistory = conversationHistory.slice(-14);
     }
     
     responseBox.innerHTML = highlightImportantParts(answer);

@@ -45,6 +45,36 @@
       </button>
     </div>
 
+    <!-- Role Selector Row -->
+    <div class="role-row">
+      <span class="role-label">Role:</span>
+      <select id="role-select" class="role-select">
+        <option value="general">General IT</option>
+        <optgroup label="Development">
+          <option value="frontend">Frontend Developer</option>
+          <option value="backend">Backend Developer</option>
+          <option value="fullstack">Full Stack Developer</option>
+          <option value="mobile">Mobile Developer</option>
+        </optgroup>
+        <optgroup label="Infrastructure & Cloud">
+          <option value="devops">DevOps Engineer</option>
+          <option value="cloud">Cloud Engineer / Architect</option>
+          <option value="sre">SRE / Platform Engineer</option>
+        </optgroup>
+        <optgroup label="Data & AI">
+          <option value="data_engineer">Data Engineer</option>
+          <option value="data_scientist">Data Scientist / ML Engineer</option>
+        </optgroup>
+        <optgroup label="Other IT Roles">
+          <option value="qa">QA / SDET</option>
+          <option value="security">Security Engineer</option>
+          <option value="system_design">System Design / Architect</option>
+          <option value="dba">Database Administrator</option>
+          <option value="embedded">Embedded / Systems Engineer</option>
+        </optgroup>
+      </select>
+    </div>
+
     <!-- Transcription Area (compact) -->
     <div class="section-compact">
       <div class="section-header">
@@ -90,7 +120,7 @@
 
       <!-- Ollama Section (Local / Free) -->
       <div class="setting-group">
-        <div class="setting-group-title">Ollama — Local &amp; Free</div>
+        <div class="setting-group-title">Ollama — Local &amp; Free (Auto-detected)</div>
         <div class="setting-item setting-item-row">
           <label style="flex:1;">Enable Ollama</label>
           <input type="checkbox" id="ollama-enabled" style="width:auto;accent-color:#a78bfa;">
@@ -101,14 +131,26 @@
         </div>
         <div class="setting-item">
           <label>Chat Model:</label>
-          <input type="text" id="ollama-chat-model-input" placeholder="llama3.2">
+          <input type="text" id="ollama-chat-model-input" placeholder="mistral">
         </div>
         <div class="setting-item">
           <label>Vision Model (for screenshots):</label>
           <input type="text" id="ollama-vision-model-input" placeholder="llava">
         </div>
         <small style="color: rgba(255,255,255,0.4); font-size: 10px; padding: 2px 0; display:block;">
-          Install: ollama.ai &nbsp;|&nbsp; Pull models: <b>ollama pull llama3.2</b> &amp; <b>ollama pull llava</b>
+          Ollama auto-starts with the app &nbsp;|&nbsp; Models: <b>mistral</b> &amp; <b>llava</b>
+        </small>
+      </div>
+
+      <!-- Local Whisper Section -->
+      <div class="setting-group">
+        <div class="setting-group-title">Local Whisper — Free Transcription (No API Key)</div>
+        <div class="setting-item setting-item-row">
+          <label style="flex:1;">Use Local Whisper</label>
+          <input type="checkbox" id="local-whisper-enabled" style="width:auto;accent-color:#34d399;">
+        </div>
+        <small style="color: rgba(255,255,255,0.4); font-size: 10px; padding: 2px 0; display:block;">
+          Downloads ~145MB model on first use. No API key needed, unlimited, works offline.
         </small>
       </div>
 
@@ -148,7 +190,11 @@
     <!-- Footer -->
     <div class="footer">
       <button class="settings-toggle" id="settings-toggle">⚙️ Settings</button>
-      <span class="hint">⌘H hide | ⌘↩ answer | ⌘⇧↩ ss | ⌘↑↓ scroll | ⌘←→↑↓ move</span>
+      <div class="opacity-control">
+        <span class="opacity-label">👁</span>
+        <input type="range" id="opacity-slider" min="20" max="100" value="100" step="5" class="opacity-slider">
+        <span class="opacity-value" id="opacity-value">100%</span>
+      </div>
     </div>
     
     <!-- Resize Handle -->

@@ -658,3 +658,85 @@ body {
   margin-right: 6px;
   animation: pulse 1s infinite;
 }
+
+/* Role Selector Row */
+.role-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px 2px;
+}
+
+.role-label {
+  color: rgba(255,255,255,0.5);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.role-select {
+  flex: 1;
+  background: rgba(255,255,255,0.08);
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 6px;
+  color: #e2e8f0;
+  font-size: 11px;
+  padding: 3px 6px;
+  outline: none;
+  cursor: pointer;
+}
+
+.role-select:focus {
+  border-color: rgba(167,139,250,0.5);
+}
+
+.role-select option, .role-select optgroup {
+  background: #1e1e2e;
+  color: #e2e8f0;
+}
+
+/* Opacity Control */
+.opacity-control {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex: 1;
+  justify-content: flex-end;
+}
+
+.opacity-label {
+  font-size: 11px;
+  opacity: 0.5;
+}
+
+.opacity-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 80px;
+  height: 3px;
+  background: rgba(255,255,255,0.15);
+  border-radius: 2px;
+  outline: none;
+  cursor: pointer;
+}
+
+.opacity-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: rgba(167,139,250,0.9);
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.opacity-slider::-webkit-slider-thumb:hover {
+  background: #a78bfa;
+}
+
+.opacity-value {
+  color: rgba(255,255,255,0.4);
+  font-size: 10px;
+  min-width: 30px;
+  text-align: right;
+}
