@@ -61,20 +61,20 @@ app.whenReady().then(async () => {
   // Open DevTools for debugging (uncomment if needed)
   // mainWindow.webContents.openDevTools({ mode: 'detach' });
 
-  // Ctrl+Enter for AI Answer
-  globalShortcut.register('Control+Return', () => {
+  // Cmd+Enter → AI Answer
+  globalShortcut.register('Command+Return', () => {
     if (!mainWindow || mainWindow.isDestroyed()) return;
     mainWindow.webContents.send('trigger-ai-answer');
   });
 
-  // Ctrl+Shift+S for screenshot analysis
-  globalShortcut.register('Control+Shift+S', () => {
+  // Cmd+Shift+Enter → Screenshot analysis
+  globalShortcut.register('Command+Shift+Return', () => {
     if (!mainWindow || mainWindow.isDestroyed()) return;
     mainWindow.webContents.send('trigger-screenshot');
   });
 
-  // Ctrl+H to toggle visibility
-  globalShortcut.register('Control+H', () => {
+  // Cmd+H → toggle visibility
+  globalShortcut.register('Command+H', () => {
     if (!mainWindow || mainWindow.isDestroyed()) return;
     if (isVisible) {
       mainWindow.hide();
@@ -85,49 +85,48 @@ app.whenReady().then(async () => {
     }
   });
 
-  // Cmd+D (Mac) / Ctrl+D (Win) to hide/show entire window
-  globalShortcut.register('CommandOrControl+D', () => {
-    if (!mainWindow || mainWindow.isDestroyed()) return;
-    if (isVisible) {
-      mainWindow.hide();
-      isVisible = false;
-    } else {
-      mainWindow.show();
-      isVisible = true;
-    }
-  });
-
-  // Cmd+N (Mac) / Ctrl+N (Win) to stop listening
-  globalShortcut.register('CommandOrControl+N', () => {
+  // Cmd+N → stop listening
+  globalShortcut.register('Command+N', () => {
     if (!mainWindow || mainWindow.isDestroyed()) return;
     mainWindow.webContents.send('stop-listening');
   });
 
-  // Ctrl+Shift+Arrow keys to move window
-  const MOVE_STEP = 30;
-  
-  globalShortcut.register('Control+Shift+Right', () => {
+  // Cmd+Arrow → move window
+  const MOVE_STEP = 40;
+
+  globalShortcut.register('Command+Right', () => {
     if (!mainWindow || mainWindow.isDestroyed()) return;
     const [x, y] = mainWindow.getPosition();
     mainWindow.setPosition(x + MOVE_STEP, y);
   });
-  
-  globalShortcut.register('Control+Shift+Left', () => {
+
+  globalShortcut.register('Command+Left', () => {
     if (!mainWindow || mainWindow.isDestroyed()) return;
     const [x, y] = mainWindow.getPosition();
     mainWindow.setPosition(x - MOVE_STEP, y);
   });
-  
-  globalShortcut.register('Control+Shift+Up', () => {
+
+  globalShortcut.register('Command+Up', () => {
     if (!mainWindow || mainWindow.isDestroyed()) return;
     const [x, y] = mainWindow.getPosition();
     mainWindow.setPosition(x, y - MOVE_STEP);
   });
-  
-  globalShortcut.register('Control+Shift+Down', () => {
+
+  globalShortcut.register('Command+Down', () => {
     if (!mainWindow || mainWindow.isDestroyed()) return;
     const [x, y] = mainWindow.getPosition();
     mainWindow.setPosition(x, y + MOVE_STEP);
+  });
+
+  // Cmd+Shift+Up/Down → scroll AI response
+  globalShortcut.register('Command+Shift+Up', () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    mainWindow.webContents.send('scroll-response', 'up');
+  });
+
+  globalShortcut.register('Command+Shift+Down', () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    mainWindow.webContents.send('scroll-response', 'down');
   });
 
   // Auto-start listening when app loads (with delay to ensure permissions)

@@ -59,11 +59,14 @@
       <div class="section-header">
         <span>🤖 AI Response</span>
         <div class="response-actions">
+          <button class="nav-btn" id="response-back-btn" title="Previous response" disabled>◀</button>
+          <button class="nav-btn" id="response-forward-btn" title="Next response" disabled>▶</button>
           <button class="clear-btn" id="clear-history" title="Clear conversation history">New Topic</button>
+          <button class="clear-btn" id="clear-response" title="Clear response box">Clear</button>
           <button class="copy-btn" id="copy-response">Copy</button>
         </div>
       </div>
-      <div class="response-box-large" id="response-box" contenteditable="true" data-placeholder="Press Ctrl+Enter for AI answer..."></div>
+      <div class="response-box-large" id="response-box" contenteditable="true" data-placeholder="Press Cmd+Enter for AI answer..."></div>
     </div>
 
     <!-- Resume/Context Section -->
@@ -84,15 +87,45 @@
 
     <!-- Settings Panel -->
     <div class="settings-panel" id="settings-panel">
-      <div class="setting-item">
-        <label>API Key (api.ai.cc):</label>
-        <input type="password" id="api-key-input" placeholder="sk-...">
+
+      <!-- Ollama Section (Local / Free) -->
+      <div class="setting-group">
+        <div class="setting-group-title">Ollama — Local &amp; Free</div>
+        <div class="setting-item setting-item-row">
+          <label style="flex:1;">Enable Ollama</label>
+          <input type="checkbox" id="ollama-enabled" style="width:auto;accent-color:#a78bfa;">
+        </div>
+        <div class="setting-item">
+          <label>Ollama URL:</label>
+          <input type="text" id="ollama-url-input" placeholder="http://localhost:11434/v1">
+        </div>
+        <div class="setting-item">
+          <label>Chat Model:</label>
+          <input type="text" id="ollama-chat-model-input" placeholder="llama3.2">
+        </div>
+        <div class="setting-item">
+          <label>Vision Model (for screenshots):</label>
+          <input type="text" id="ollama-vision-model-input" placeholder="llava">
+        </div>
+        <small style="color: rgba(255,255,255,0.4); font-size: 10px; padding: 2px 0; display:block;">
+          Install: ollama.ai &nbsp;|&nbsp; Pull models: <b>ollama pull llama3.2</b> &amp; <b>ollama pull llava</b>
+        </small>
       </div>
-      <div class="setting-item">
-        <label>Groq API Key (free - for Whisper):</label>
-        <input type="password" id="groq-key-input" placeholder="gsk_...">
-        <small style="color: rgba(255,255,255,0.5); font-size: 10px;">Get free key from console.groq.com</small>
+
+      <!-- Cloud Keys Section -->
+      <div class="setting-group">
+        <div class="setting-group-title">Cloud API Keys (optional)</div>
+        <div class="setting-item">
+          <label>OpenAI API Key:</label>
+          <input type="password" id="api-key-input" placeholder="sk-...">
+        </div>
+        <div class="setting-item">
+          <label>Groq API Key (free Whisper transcription):</label>
+          <input type="password" id="groq-key-input" placeholder="gsk_...">
+          <small style="color: rgba(255,255,255,0.4); font-size: 10px;">console.groq.com — free, used for voice transcription</small>
+        </div>
       </div>
+
       <div class="setting-item">
         <label>Language:</label>
         <select id="language-select">
@@ -109,13 +142,13 @@
           <option value="ar">Arabic</option>
         </select>
       </div>
-      <button class="save-btn" id="save-api-key">Save Keys</button>
+      <button class="save-btn" id="save-api-key">Save Settings</button>
     </div>
 
     <!-- Footer -->
     <div class="footer">
       <button class="settings-toggle" id="settings-toggle">⚙️ Settings</button>
-      <span class="hint">Cmd+D hide | Cmd+N stop</span>
+      <span class="hint">⌘H hide | ⌘↩ answer | ⌘⇧↩ ss | ⌘↑↓ scroll | ⌘←→↑↓ move</span>
     </div>
     
     <!-- Resize Handle -->

@@ -219,6 +219,28 @@ body {
   color: white;
 }
 
+.nav-btn {
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  color: rgba(255, 255, 255, 0.6);
+  padding: 3px 8px;
+  border-radius: 4px;
+  font-size: 10px;
+  cursor: pointer;
+  transition: all 0.2s;
+  line-height: 1;
+}
+
+.nav-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.2);
+  color: white;
+}
+
+.nav-btn:disabled {
+  opacity: 0.25;
+  cursor: default;
+}
+
 .transcription-box {
   width: 100%;
   background: rgba(0, 0, 0, 0.3);
@@ -499,10 +521,35 @@ body {
   display: block;
 }
 
-.setting-item {
+.setting-group {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-bottom: 10px;
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+.setting-group-title {
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 2px;
+}
+
+.setting-item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.setting-item-row {
+  flex-direction: row;
+  align-items: center;
 }
 
 .setting-item label {
@@ -510,7 +557,8 @@ body {
   font-size: 12px;
 }
 
-.setting-item input {
+.setting-item input[type="text"],
+.setting-item input[type="password"] {
   background: rgba(255, 255, 255, 0.1);
   border: 1px solid rgba(255, 255, 255, 0.2);
   border-radius: 6px;
@@ -519,7 +567,14 @@ body {
   font-size: 12px;
 }
 
-.setting-item input:focus {
+.setting-item input[type="text"]:focus,
+.setting-item input[type="password"]:focus {
+  outline: none;
+  border-color: #667eea;
+}
+
+/* legacy selector kept for selects */
+.setting-item input:not([type="checkbox"]):focus {
   outline: none;
   border-color: #667eea;
 }

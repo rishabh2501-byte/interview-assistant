@@ -9,6 +9,10 @@ let pdfContext = localStorage.getItem('pdf_context') || '';
 // Conversation history for follow-up questions
 let conversationHistory = [];
 
+// Response display history (back/forward navigation)
+let responseHistory = [];
+let responseHistoryIndex = -1;
+
 // API Keys
 // Groq: FREE Whisper + LLM - get key from console.groq.com
 // OpenAI: Paid but reliable
@@ -203,6 +207,50 @@ clearHistoryBtn.addEventListener('click', () => {
   showStatus('Conversation cleared - ready for new topic', 'success');
   console.log('Conversation history cleared');
 });
+
+// Clear response box
+document.getElementById('clear-response').addEventListener('click', () => {
+  responseBox.innerHTML = '';
+  responseHistory = [];
+  responseHistoryIndex = -1;
+  updateNavButtons();
+});
+
+// Back/Forward navigation through response history
+document.getElementById('response-back-btn').addEventListener('click', () => {
+  if (responseHistoryIndex > 0) {
+    responseHistoryIndex--;
+    responseBox.innerHTML = responseHistory[responseHistoryIndex];
+    updateNavButtons();
+  }
+});
+
+document.getElementById('response-forward-btn').addEventListener('click', () => {
+  if (responseHistoryIndex < responseHistory.length - 1) {
+    responseHistoryIndex++;
+    responseBox.innerHTML = responseHistory[responseHistoryIndex];
+    updateNavButtons();
+  }
+});
+
+// Scroll AI response via keyboard shortcut (Cmd+Shift+Up/Down)
+ipcRenderer.on('scroll-response', (event, direction) => {
+  responseBox.scrollTop += direction === 'up' ? -140 : 140;
+});
+
+// Add a response to display history and update nav buttons
+function addToResponseHistory(html) {
+  // Drop any forward entries when a new response arrives
+  responseHistory = responseHistory.slice(0, responseHistoryIndex + 1);
+  responseHistory.push(html);
+  responseHistoryIndex = responseHistory.length - 1;
+  updateNavButtons();
+}
+
+function updateNavButtons() {
+  document.getElementById('response-back-btn').disabled = responseHistoryIndex <= 0;
+  document.getElementById('response-forward-btn').disabled = responseHistoryIndex >= responseHistory.length - 1;
+}
 
 // Copy Response
 copyResponseBtn.addEventListener('click', () => {
@@ -602,6 +650,7 @@ ${pdfContext ? `CANDIDATE'S RESUME/CV (from PDF):\n${pdfContext}\n\n` : ''}${use
     }
     
     responseBox.innerHTML = highlightImportantParts(answer);
+    addToResponseHistory(responseBox.innerHTML);
     showStatus('✓ Answer ready!', 'success');
     console.log('Conversation history length:', conversationHistory.length);
 
@@ -740,6 +789,7 @@ async function captureAndAnalyzeScreenshot() {
     const data = JSON.parse(responseText);
     const analysis = data.choices[0].message.content;
     responseBox.innerHTML = highlightImportantParts(analysis);
+    addToResponseHistory(responseBox.innerHTML);
     showStatus('Screenshot analyzed!', 'success');
 
   } catch (error) {
