@@ -12,8 +12,13 @@ let conversationHistory = [];
 // API Keys
 // Groq: FREE Whisper + LLM - get key from console.groq.com
 // OpenAI: Paid but reliable
+// Ollama: FREE local models - install from ollama.ai
 let groqApiKey = localStorage.getItem('groq_api_key') || '';
 let apiKey = localStorage.getItem('openai_api_key') || '';
+let ollamaEnabled = localStorage.getItem('ollama_enabled') === 'true';
+let ollamaUrl = localStorage.getItem('ollama_url') || 'http://localhost:11434/v1';
+let ollamaChatModel = localStorage.getItem('ollama_chat_model') || 'llama3.2';
+let ollamaVisionModel = localStorage.getItem('ollama_vision_model') || 'llava';
 
 // API Configuration
 const GROQ_API_URL = 'https://api.groq.com/openai/v1';
@@ -39,6 +44,12 @@ const statusIndicator = document.getElementById('status-indicator');
 // Groq API key input element
 const groqKeyInput = document.getElementById('groq-key-input');
 
+// Ollama input elements
+const ollamaEnabledCheckbox = document.getElementById('ollama-enabled');
+const ollamaUrlInput = document.getElementById('ollama-url-input');
+const ollamaChatModelInput = document.getElementById('ollama-chat-model-input');
+const ollamaVisionModelInput = document.getElementById('ollama-vision-model-input');
+
 // User context/resume
 const userContextInput = document.getElementById('user-context');
 const saveContextBtn = document.getElementById('save-context');
@@ -57,6 +68,18 @@ if (groqApiKey) {
 }
 if (userContext) {
   userContextInput.value = userContext;
+}
+if (ollamaEnabledCheckbox) {
+  ollamaEnabledCheckbox.checked = ollamaEnabled;
+}
+if (ollamaUrlInput) {
+  ollamaUrlInput.value = ollamaUrl;
+}
+if (ollamaChatModelInput) {
+  ollamaChatModelInput.value = ollamaChatModel;
+}
+if (ollamaVisionModelInput) {
+  ollamaVisionModelInput.value = ollamaVisionModel;
 }
 if (languageSelect) {
   languageSelect.value = selectedLanguage;
@@ -150,12 +173,21 @@ settingsToggle.addEventListener('click', () => {
 saveApiKeyBtn.addEventListener('click', () => {
   apiKey = apiKeyInput.value.trim();
   groqApiKey = groqKeyInput.value.trim();
+  ollamaEnabled = ollamaEnabledCheckbox ? ollamaEnabledCheckbox.checked : false;
+  ollamaUrl = (ollamaUrlInput ? ollamaUrlInput.value.trim() : '') || 'http://localhost:11434/v1';
+  ollamaChatModel = (ollamaChatModelInput ? ollamaChatModelInput.value.trim() : '') || 'llama3.2';
+  ollamaVisionModel = (ollamaVisionModelInput ? ollamaVisionModelInput.value.trim() : '') || 'llava';
   localStorage.setItem('openai_api_key', apiKey);
   localStorage.setItem('groq_api_key', groqApiKey);
-  showStatus('Keys saved!', 'success');
+  localStorage.setItem('ollama_enabled', ollamaEnabled);
+  localStorage.setItem('ollama_url', ollamaUrl);
+  localStorage.setItem('ollama_chat_model', ollamaChatModel);
+  localStorage.setItem('ollama_vision_model', ollamaVisionModel);
+  showStatus('Settings saved!', 'success');
   settingsPanel.classList.remove('active');
   console.log('API Key saved:', apiKey ? 'Yes' : 'No');
   console.log('Groq Key saved:', groqApiKey ? 'Yes' : 'No');
+  console.log('Ollama enabled:', ollamaEnabled, '| URL:', ollamaUrl, '| Chat model:', ollamaChatModel, '| Vision model:', ollamaVisionModel);
 });
 
 // Clear Transcript
@@ -470,29 +502,43 @@ function updateTranscriptionBox(text) {
 async function generateAIAnswer() {
   const hasGroq = groqApiKey && groqApiKey.length > 10;
   const hasOpenAI = apiKey && apiKey.length > 10;
-  
-  if (!hasGroq && !hasOpenAI) {
-    showStatus('No API key set', 'error');
+
+  if (!ollamaEnabled && !hasGroq && !hasOpenAI) {
+    showStatus('No AI configured', 'error');
     settingsPanel.classList.add('active');
     return;
   }
 
   // Use the textarea value (allows user edits) instead of just transcriptionText
   const currentTranscription = transcriptionBox.value.trim();
-  
+
   if (!currentTranscription) {
     showStatus('No transcription yet', 'error');
     return;
   }
 
   responseBox.innerHTML = '<span style="color: rgba(255,255,255,0.6)">Generating answer...</span>';
-  
-  // Use Groq (free) or OpenAI
-  const chatUrl = hasGroq ? `${GROQ_API_URL}/chat/completions` : `${OPENAI_API_URL}/chat/completions`;
-  const chatKey = hasGroq ? groqApiKey : apiKey;
-  const chatModel = hasGroq ? 'llama-3.3-70b-versatile' : 'gpt-3.5-turbo';
-  
-  console.log('Generating answer with:', hasGroq ? 'Groq (FREE)' : 'OpenAI');
+
+  // Priority: Ollama (local/free) > Groq (free cloud) > OpenAI (paid)
+  let chatUrl, chatKey, chatModel, providerName;
+  if (ollamaEnabled) {
+    chatUrl = `${ollamaUrl}/chat/completions`;
+    chatKey = 'ollama';
+    chatModel = ollamaChatModel;
+    providerName = `Ollama (${ollamaChatModel})`;
+  } else if (hasGroq) {
+    chatUrl = `${GROQ_API_URL}/chat/completions`;
+    chatKey = groqApiKey;
+    chatModel = 'llama-3.3-70b-versatile';
+    providerName = 'Groq (FREE)';
+  } else {
+    chatUrl = `${OPENAI_API_URL}/chat/completions`;
+    chatKey = apiKey;
+    chatModel = 'gpt-3.5-turbo';
+    providerName = 'OpenAI';
+  }
+
+  console.log('Generating answer with:', providerName);
   
   // Build system message with context
   const systemMessage = {
@@ -568,13 +614,13 @@ ${pdfContext ? `CANDIDATE'S RESUME/CV (from PDF):\n${pdfContext}\n\n` : ''}${use
 
 // Capture and Analyze Screenshot
 async function captureAndAnalyzeScreenshot() {
-  const hasGroq = groqApiKey && groqApiKey.length > 10;
   const hasOpenAI = apiKey && apiKey.length > 10;
-  
-  if (!hasOpenAI) {
-    // Vision requires OpenAI - Groq doesn't support vision yet
-    responseBox.innerHTML = '<span style="color: #f87171">Screenshot analysis requires OpenAI API key (Groq doesn\'t support vision yet)</span>';
-    showStatus('Need OpenAI key for vision', 'error');
+  const hasGroq = groqApiKey && groqApiKey.length > 10;
+
+  // Vision works with: Ollama (local) > Groq/Llama-4-Scout (free) > OpenAI gpt-4o (paid)
+  if (!ollamaEnabled && !hasGroq && !hasOpenAI) {
+    responseBox.innerHTML = '<span style="color: #f87171">Screenshot analysis needs one of:<br>• Groq API key (free) — already used for transcription<br>• Ollama enabled with a vision model (e.g. llava) — free & local<br>• OpenAI API key with gpt-4o access</span>';
+    showStatus('No vision provider configured', 'error');
     settingsPanel.classList.add('active');
     return;
   }
@@ -585,20 +631,20 @@ async function captureAndAnalyzeScreenshot() {
   try {
     const sources = await ipcRenderer.invoke('get-sources');
     console.log('Available sources:', sources.map(s => s.name));
-    
+
     // Get the entire screen - look for "Entire screen" specifically
-    const screenSource = sources.find(s => 
-      s.name.toLowerCase().includes('entire') || 
-      s.name.toLowerCase().includes('screen') || 
+    const screenSource = sources.find(s =>
+      s.name.toLowerCase().includes('entire') ||
+      s.name.toLowerCase().includes('screen') ||
       s.name.toLowerCase().includes('display')
     ) || sources[sources.length - 1]; // Last source is usually the screen
-    
+
     console.log('Using source:', screenSource?.name);
-    
+
     if (!screenSource) {
       throw new Error('No screen source. Grant Screen Recording permission.');
     }
-    
+
     const stream = await navigator.mediaDevices.getUserMedia({
       audio: false,
       video: {
@@ -625,15 +671,36 @@ async function captureAndAnalyzeScreenshot() {
     const imageData = canvas.toDataURL('image/jpeg', 0.8);
     const base64Image = imageData.split(',')[1];
 
-    console.log('Sending to OpenAI Vision...');
-    const response = await fetch(`${OPENAI_API_URL}/chat/completions`, {
+    // Choose vision provider: Ollama (local free) > Groq (cloud free) > OpenAI (paid)
+    let visionUrl, visionKey, visionModel, providerName;
+    if (ollamaEnabled) {
+      visionUrl = `${ollamaUrl}/chat/completions`;
+      visionKey = 'ollama';
+      visionModel = ollamaVisionModel;
+      providerName = `Ollama (${ollamaVisionModel})`;
+    } else if (hasGroq) {
+      visionUrl = `${GROQ_API_URL}/chat/completions`;
+      visionKey = groqApiKey;
+      visionModel = 'meta-llama/llama-4-scout-17b-16e-instruct';
+      providerName = 'Groq (Llama 4 Scout — free)';
+    } else {
+      visionUrl = `${OPENAI_API_URL}/chat/completions`;
+      visionKey = apiKey;
+      visionModel = 'gpt-4o';
+      providerName = 'OpenAI (gpt-4o)';
+    }
+
+    console.log('Sending to vision provider:', providerName);
+    responseBox.innerHTML = `<span style="color: rgba(255,255,255,0.6)">Analyzing with ${providerName}...</span>`;
+
+    const response = await fetch(visionUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`
+        'Authorization': `Bearer ${visionKey}`
       },
       body: JSON.stringify({
-        model: 'gpt-4o',
+        model: visionModel,
         messages: [
           {
             role: 'user',
@@ -657,12 +724,16 @@ async function captureAndAnalyzeScreenshot() {
 
     console.log('Vision API response status:', response.status);
     const responseText = await response.text();
-    console.log('Vision API response:', responseText);
 
     if (!response.ok) {
-      // If gpt-4o fails, show the error
-      responseBox.innerHTML = `<span style="color: #f87171">API Error: ${response.status}. Vision model may not be available on this API.</span>`;
-      showStatus('Vision not available', 'error');
+      let hint = '';
+      if (ollamaEnabled) {
+        hint = `Make sure "${ollamaVisionModel}" is pulled: run <b>ollama pull ${ollamaVisionModel}</b> in terminal.`;
+      } else if (hasGroq) {
+        hint = 'Groq vision request failed. Check your Groq API key is valid.';
+      }
+      responseBox.innerHTML = `<span style="color: #f87171">Vision API error (${response.status}). ${hint}</span>`;
+      showStatus('Vision error', 'error');
       return;
     }
 
@@ -673,7 +744,15 @@ async function captureAndAnalyzeScreenshot() {
 
   } catch (error) {
     console.error('Screenshot analysis error:', error);
-    responseBox.innerHTML = '<span style="color: #f87171">Error analyzing screenshot. Check permissions.</span>';
+    let msg = 'Error analyzing screenshot.';
+    if (error.message && error.message.includes('fetch')) {
+      msg = ollamaEnabled
+        ? 'Cannot reach Ollama. Make sure it is running: <b>ollama serve</b>'
+        : 'Network error. Check your connection.';
+    } else {
+      msg += ' Check screen recording permissions.';
+    }
+    responseBox.innerHTML = `<span style="color: #f87171">${msg}</span>`;
     showStatus('Error analyzing screenshot', 'error');
   }
 }
