@@ -403,8 +403,13 @@ aiAnswerBtn.addEventListener('click', async () => {
   await generateAIAnswer();
 });
 
-// Screenshot Analysis Button
+// Screenshot Analysis Button — 3-second countdown so user can switch to the question window
 screenshotBtn.addEventListener('click', async () => {
+  for (let i = 3; i > 0; i--) {
+    responseBox.innerHTML = `<span style="color: rgba(255,255,255,0.85); font-size: 1.1em;">📸 Switch to the question window...<br>Capturing in <b>${i}</b>s</span>`;
+    showStatus(`Capturing in ${i}s`, 'processing');
+    await new Promise(r => setTimeout(r, 1000));
+  }
   await captureAndAnalyzeScreenshot();
 });
 
@@ -739,18 +744,19 @@ async function generateAIAnswer() {
 
   responseBox.innerHTML = '<span style="color: rgba(255,255,255,0.6)">Generating answer...</span>';
 
-  // Priority: Ollama (local/free) > Groq (free cloud) > OpenAI (paid)
+  // Priority: Groq (fast cloud, no laptop load) > Ollama (local) > OpenAI (paid)
+  // Groq is prioritized to avoid slowing down the laptop with local model inference
   let chatUrl, chatKey, chatModel, providerName;
-  if (ollamaEnabled) {
-    chatUrl = `${ollamaUrl}/chat/completions`;
-    chatKey = 'ollama';
-    chatModel = ollamaChatModel;
-    providerName = `Ollama (${ollamaChatModel})`;
-  } else if (hasGroq) {
+  if (hasGroq) {
     chatUrl = `${GROQ_API_URL}/chat/completions`;
     chatKey = groqApiKey;
     chatModel = 'llama-3.3-70b-versatile';
     providerName = 'Groq (FREE)';
+  } else if (ollamaEnabled) {
+    chatUrl = `${ollamaUrl}/chat/completions`;
+    chatKey = 'ollama';
+    chatModel = ollamaChatModel;
+    providerName = `Ollama (${ollamaChatModel})`;
   } else {
     chatUrl = `${OPENAI_API_URL}/chat/completions`;
     chatKey = apiKey;
@@ -860,7 +866,6 @@ async function captureAndAnalyzeScreenshot() {
   const hasOpenAI = apiKey && apiKey.length > 10;
   const hasGroq = groqApiKey && groqApiKey.length > 10;
 
-  // Vision works with: Ollama (local) > Groq/Llama-4-Scout (free) > OpenAI gpt-4o (paid)
   if (!ollamaEnabled && !hasGroq && !hasOpenAI) {
     responseBox.innerHTML = '<span style="color: #f87171">Screenshot analysis needs one of:<br>• Groq API key (free) — already used for transcription<br>• Ollama enabled with a vision model (e.g. llava) — free & local<br>• OpenAI API key with gpt-4o access</span>';
     showStatus('No vision provider configured', 'error');
@@ -869,23 +874,35 @@ async function captureAndAnalyzeScreenshot() {
   }
 
   responseBox.innerHTML = '<span style="color: rgba(255,255,255,0.6)">Capturing screen...</span>';
-  console.log('Starting screenshot capture...');
 
   try {
-    const sources = await ipcRenderer.invoke('get-sources');
-    console.log('Available sources:', sources.map(s => s.name));
+    // When triggered via global shortcut (Cmd+Shift+Enter) the previous app is still
+    // frontmost, so we capture just that window — much cleaner than the full screen.
+    // Falls back to null if our own app is frontmost (button-click case).
+    let focusedSource = null;
+    try {
+      focusedSource = await ipcRenderer.invoke('get-focused-window-source');
+    } catch (_) {}
 
-    // Get the entire screen - look for "Entire screen" specifically
-    const screenSource = sources.find(s =>
-      s.name.toLowerCase().includes('entire') ||
-      s.name.toLowerCase().includes('screen') ||
-      s.name.toLowerCase().includes('display')
-    ) || sources[sources.length - 1]; // Last source is usually the screen
+    let captureSource;
+    let isWindowCapture = false;
 
-    console.log('Using source:', screenSource?.name);
+    if (focusedSource) {
+      captureSource = focusedSource;
+      isWindowCapture = true;
+      console.log('Capturing focused window:', focusedSource.name);
+    } else {
+      const sources = await ipcRenderer.invoke('get-sources');
+      captureSource = sources.find(s =>
+        s.name.toLowerCase().includes('entire') ||
+        s.name.toLowerCase().includes('screen') ||
+        s.name.toLowerCase().includes('display')
+      ) || sources[sources.length - 1];
+      console.log('Capturing full screen:', captureSource?.name);
+    }
 
-    if (!screenSource) {
-      throw new Error('No screen source. Grant Screen Recording permission.');
+    if (!captureSource) {
+      throw new Error('No screen source found. Grant Screen Recording permission in System Settings.');
     }
 
     const stream = await navigator.mediaDevices.getUserMedia({
@@ -893,108 +910,140 @@ async function captureAndAnalyzeScreenshot() {
       video: {
         mandatory: {
           chromeMediaSource: 'desktop',
-          chromeMediaSourceId: screenSource.id
+          chromeMediaSourceId: captureSource.id
         }
       }
     });
-    console.log('Screen stream obtained');
 
     const video = document.createElement('video');
     video.srcObject = stream;
+    await new Promise(resolve => { video.onloadedmetadata = resolve; });
     await video.play();
 
+    // Window capture → full resolution (it's already one window).
+    // Full screen → cap at 1920px wide so the payload stays manageable.
+    const MAX_WIDTH = isWindowCapture ? Infinity : 1920;
+    const scale = Math.min(1, MAX_WIDTH / video.videoWidth);
     const canvas = document.createElement('canvas');
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
-    const ctx = canvas.getContext('2d');
-    ctx.drawImage(video, 0, 0);
+    canvas.width  = Math.round(video.videoWidth  * scale);
+    canvas.height = Math.round(video.videoHeight * scale);
+    canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
+    stream.getTracks().forEach(t => t.stop());
 
-    stream.getTracks().forEach(track => track.stop());
+    const base64Image = canvas.toDataURL('image/jpeg', isWindowCapture ? 0.85 : 0.75).split(',')[1];
 
-    const imageData = canvas.toDataURL('image/jpeg', 0.8);
-    const base64Image = imageData.split(',')[1];
-
-    // Choose vision provider: Ollama (local free) > Groq (cloud free) > OpenAI (paid)
+    // Vision provider priority: gpt-4o > Groq Llama-4-Scout > Ollama
+    // gpt-4o is dramatically better at understanding screenshots than smaller models.
     let visionUrl, visionKey, visionModel, providerName;
-    if (ollamaEnabled) {
-      visionUrl = `${ollamaUrl}/chat/completions`;
-      visionKey = 'ollama';
-      visionModel = ollamaVisionModel;
-      providerName = `Ollama (${ollamaVisionModel})`;
-    } else if (hasGroq) {
-      visionUrl = `${GROQ_API_URL}/chat/completions`;
-      visionKey = groqApiKey;
-      visionModel = 'meta-llama/llama-4-scout-17b-16e-instruct';
-      providerName = 'Groq (Llama 4 Scout — free)';
-    } else {
+    if (hasOpenAI) {
       visionUrl = `${OPENAI_API_URL}/chat/completions`;
       visionKey = apiKey;
       visionModel = 'gpt-4o';
       providerName = 'OpenAI (gpt-4o)';
+    } else if (hasGroq) {
+      visionUrl = `${GROQ_API_URL}/chat/completions`;
+      visionKey = groqApiKey;
+      visionModel = 'meta-llama/llama-4-scout-17b-16e-instruct';
+      providerName = 'Groq (Llama 4 Scout)';
+    } else {
+      visionUrl = `${ollamaUrl}/chat/completions`;
+      visionKey = 'ollama';
+      visionModel = ollamaVisionModel;
+      providerName = `Ollama (${ollamaVisionModel})`;
     }
 
-    console.log('Sending to vision provider:', providerName);
     responseBox.innerHTML = `<span style="color: rgba(255,255,255,0.6)">Analyzing with ${providerName}...</span>`;
+
+    const role = ROLE_DATA[selectedRole] || ROLE_DATA['general'];
+    const recentTranscription = transcriptionBox.value.trim();
+
+    // Short, positive system message — models follow these much better than long "DO NOT" lists
+    const systemContent = [
+      `You are a ${role.title} candidate in a live job interview. Answer every question as yourself, in first person, with real technical depth.`,
+      `Your tech stack: ${role.stack}`,
+      pdfContext ? `Your background: ${pdfContext.slice(0, 800)}` : '',
+      userContext ? `Additional context: ${userContext}` : ''
+    ].filter(Boolean).join('\n');
+
+    // Clear, direct user instruction — tell the model exactly what to do
+    const taskText = [
+      'Look at this screenshot and identify the interview question, coding problem, or technical task shown on screen.',
+      recentTranscription ? `Context from the conversation: "${recentTranscription.slice(-400)}"` : '',
+      `Respond with a complete answer as a ${role.title} candidate:`,
+      '• For coding problems: write the full working solution (use Java unless another language is clearly shown), explain your approach, state time & space complexity.',
+      '• For system design: give a structured answer with concrete choices and trade-offs.',
+      '• For conceptual questions: answer directly with examples from your experience.',
+      '• For code on screen: review it, fix bugs, suggest improvements.',
+      'Skip any description of the UI or screen layout — just answer the question.'
+    ].filter(Boolean).join('\n');
+
+    const userContent = [
+      { type: 'text', text: taskText },
+      { type: 'image_url', image_url: { url: `data:image/jpeg;base64,${base64Image}` } }
+    ];
 
     const response = await fetch(visionUrl, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${visionKey}`
-      },
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${visionKey}` },
       body: JSON.stringify({
         model: visionModel,
         messages: [
-          {
-            role: 'user',
-            content: [
-              {
-                type: 'text',
-                text: 'You are an expert interview assistant. Analyze this screenshot and provide helpful information. If there is a coding problem, provide the solution. If there is a question, answer it. Be concise and actionable.'
-              },
-              {
-                type: 'image_url',
-                image_url: {
-                  url: `data:image/jpeg;base64,${base64Image}`
-                }
-              }
-            ]
-          }
+          { role: 'system', content: systemContent },
+          { role: 'user',   content: userContent }
         ],
-        max_tokens: 1000
+        max_tokens: 800,
+        stream: true
       })
     });
 
-    console.log('Vision API response status:', response.status);
-    const responseText = await response.text();
-
     if (!response.ok) {
-      let hint = '';
-      if (ollamaEnabled) {
-        hint = `Make sure "${ollamaVisionModel}" is pulled: run <b>ollama pull ${ollamaVisionModel}</b> in terminal.`;
-      } else if (hasGroq) {
-        hint = 'Groq vision request failed. Check your Groq API key is valid.';
-      }
+      const errText = await response.text();
+      console.error('Vision API error:', errText);
+      let hint = hasGroq ? 'Check your Groq API key.' : '';
+      if (ollamaEnabled) hint = `Run: <b>ollama pull ${ollamaVisionModel}</b>`;
       responseBox.innerHTML = `<span style="color: #f87171">Vision API error (${response.status}). ${hint}</span>`;
       showStatus('Vision error', 'error');
       return;
     }
 
-    const data = JSON.parse(responseText);
-    const analysis = data.choices[0].message.content;
-    responseBox.innerHTML = highlightImportantParts(analysis);
+    // Stream tokens to screen as they arrive
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let fullText = '';
+    let buffer = '';
+    responseBox.innerHTML = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop();
+      for (const line of lines) {
+        if (!line.startsWith('data: ') || line === 'data: [DONE]') continue;
+        try {
+          const token = JSON.parse(line.slice(6)).choices?.[0]?.delta?.content || '';
+          if (token) {
+            fullText += token;
+            responseBox.innerHTML = highlightImportantParts(fullText);
+            responseBox.scrollTop = responseBox.scrollHeight;
+          }
+        } catch (_) {}
+      }
+    }
+
     addToResponseHistory(responseBox.innerHTML);
     showStatus('Screenshot analyzed!', 'success');
 
   } catch (error) {
     console.error('Screenshot analysis error:', error);
     let msg = 'Error analyzing screenshot.';
-    if (error.message && error.message.includes('fetch')) {
-      msg = ollamaEnabled
-        ? 'Cannot reach Ollama. Make sure it is running: <b>ollama serve</b>'
-        : 'Network error. Check your connection.';
+    if (error.message?.includes('fetch') || error.message?.includes('Network')) {
+      msg = ollamaEnabled ? 'Cannot reach Ollama. Run: <b>ollama serve</b>' : 'Network error. Check your connection.';
+    } else if (error.message?.includes('Permission') || error.message?.includes('screen')) {
+      msg = 'Screen recording permission denied. Enable it in System Settings → Privacy → Screen Recording.';
     } else {
-      msg += ' Check screen recording permissions.';
+      msg += ` (${error.message})`;
     }
     responseBox.innerHTML = `<span style="color: #f87171">${msg}</span>`;
     showStatus('Error analyzing screenshot', 'error');

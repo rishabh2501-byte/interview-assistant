@@ -187,6 +187,33 @@ ipcMain.handle('get-sources', async () => {
   return sources;
 });
 
+// Returns the desktopCapturer source for the currently focused non-assistant window.
+// Used by the screenshot shortcut (Cmd+Shift+Enter) to capture only the window with
+// the interview question instead of the full cluttered screen.
+// Returns null when our own app is frontmost (button-click case) so the caller
+// falls back to full-screen capture.
+ipcMain.handle('get-focused-window-source', async () => {
+  if (process.platform !== 'darwin') return null;
+  return new Promise(resolve => {
+    exec(
+      `osascript -e 'tell application "System Events" to get name of first application process whose frontmost is true'`,
+      async (err, stdout) => {
+        if (err || !stdout.trim()) return resolve(null);
+        const appName = stdout.trim().toLowerCase();
+        if (appName.includes('electron') || appName.includes('interview')) return resolve(null);
+        const sources = await desktopCapturer.getSources({
+          types: ['window'],
+          thumbnailSize: { width: 0, height: 0 }
+        });
+        const match = sources.find(s =>
+          appName.split(' ').some(word => word.length > 2 && s.name.toLowerCase().includes(word))
+        );
+        resolve(match ? { id: match.id, name: match.name } : null);
+      }
+    );
+  });
+});
+
 ipcMain.on('minimize-window', () => {
   mainWindow.hide();
   isVisible = false;
