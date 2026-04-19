@@ -1,4 +1,5 @@
-const { app, BrowserWindow, ipcMain, desktopCapturer, globalShortcut, screen, systemPreferences } = require('electron');
+const { app, BrowserWindow, ipcMain, desktopCapturer, globalShortcut, screen, systemPreferences, shell } = require('electron');
+const http = require('http');
 const path = require('path');
 const fs = require('fs');
 const { exec, spawn } = require('child_process');
@@ -7,9 +8,156 @@ const os = require('os');
 // Prevent Chromium's window capture feature from bypassing content protection
 app.commandLine.appendSwitch('disable-features', 'WindowCaptureMacV2');
 
+// Register custom protocol for deep linking (interviewai://callback?token=...)
+app.setAsDefaultProtocolClient('interviewai');
+
 let mainWindow;
 let isVisible = true;
 let ollamaProcess = null;
+let authCheckDone = false;
+let callbackServer = null;
+let callbackPort = null;
+
+// ─── Auth helpers ──────────────────────────────────────────────────────────
+function getAuthFilePath() {
+  return path.join(app.getPath('userData'), 'auth.json');
+}
+function loadStoredAuth() {
+  try { return JSON.parse(fs.readFileSync(getAuthFilePath(), 'utf8')); } catch { return null; }
+}
+function saveStoredAuth(data) {
+  try { fs.writeFileSync(getAuthFilePath(), JSON.stringify(data)); } catch {}
+}
+function clearStoredAuth() {
+  try { fs.unlinkSync(getAuthFilePath()); } catch {}
+}
+
+function apiGet(apiPath, token) {
+  return new Promise((resolve, reject) => {
+    const options = {
+      hostname: 'localhost', port: 5000, path: apiPath, method: 'GET',
+      headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) }
+    };
+    const req = http.request(options, (res) => {
+      let data = '';
+      res.on('data', (c) => (data += c));
+      res.on('end', () => {
+        try { resolve({ status: res.statusCode, body: JSON.parse(data) }); }
+        catch { resolve({ status: res.statusCode, body: data }); }
+      });
+    });
+    req.on('error', reject);
+    req.setTimeout(5000, () => { req.destroy(); reject(new Error('timeout')); });
+    req.end();
+  });
+}
+
+async function checkAuthAndSubscription(token) {
+  try {
+    const meRes = await apiGet('/api/auth/me', token);
+    if (meRes.status !== 200) return { valid: false };
+    const subRes = await apiGet('/api/subscriptions/me', token);
+    const activeSub = subRes.body?.active_subscription;
+    return { valid: true, user: meRes.body.user, hasSubscription: !!activeSub, subscription: activeSub };
+  } catch (err) {
+    return { valid: false, error: 'server_unreachable' };
+  }
+}
+
+function detectFrontendPort() {
+  return new Promise((resolve) => {
+    let found = false;
+    const ports = [5173, 5174, 5175, 3000];
+    let checked = 0;
+    ports.forEach((port) => {
+      const req = http.get(`http://localhost:${port}`, (res) => {
+        if (!found) { found = true; resolve(port); }
+      });
+      req.on('error', () => { checked++; if (checked === ports.length && !found) resolve(5173); });
+      req.setTimeout(600, () => { req.destroy(); checked++; if (checked === ports.length && !found) resolve(5173); });
+    });
+  });
+}
+
+function startCallbackServer() {
+  return new Promise((resolve) => {
+    if (callbackServer && callbackPort) return resolve(callbackPort);
+
+    const server = http.createServer((req, res) => {
+      res.setHeader('Access-Control-Allow-Origin', '*');
+      res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+      if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
+
+      const urlObj = new URL(req.url, 'http://localhost');
+
+      if (urlObj.pathname === '/auth-callback') {
+        const token = urlObj.searchParams.get('token');
+        res.writeHead(200, { 'Content-Type': 'text/plain' });
+        res.end('OK');
+        if (token && mainWindow && !mainWindow.isDestroyed()) {
+          // Close the child login window
+          closeChildWindow();
+          // Bring main window to front
+          if (mainWindow.isMinimized()) mainWindow.restore();
+          mainWindow.show();
+          mainWindow.focus();
+          app.focus({ steal: true });
+          // Directly validate in main process — no renderer round-trip needed
+          mainWindow.webContents.send('auth-state', { status: 'loading' });
+          checkAuthAndSubscription(token).then((result) => {
+            if (!mainWindow || mainWindow.isDestroyed()) return;
+            if (!result.valid) {
+              console.error('[Auth] Token invalid after callback:', result.error);
+              mainWindow.webContents.send('auth-state', { status: 'unauthenticated' });
+              return;
+            }
+            saveStoredAuth({ token });
+            if (!result.hasSubscription) {
+              mainWindow.webContents.send('auth-state', { status: 'no_subscription', user: result.user });
+            } else {
+              mainWindow.webContents.send('auth-state', { status: 'authenticated', user: result.user, subscription: result.subscription });
+              setTimeout(() => {
+                if (!mainWindow || mainWindow.isDestroyed()) return;
+                mainWindow.webContents.send('auto-start-capture');
+              }, 1500);
+            }
+          });
+        }
+      } else if (urlObj.pathname === '/subscription-updated') {
+        res.writeHead(200, { 'Content-Type': 'text/plain' });
+        res.end('OK');
+        closeChildWindow();
+        const stored = loadStoredAuth();
+        if (stored?.token && mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('auth-state', { status: 'loading' });
+          checkAuthAndSubscription(stored.token).then((result) => {
+            if (!mainWindow || mainWindow.isDestroyed()) return;
+            if (result.valid && result.hasSubscription) {
+              mainWindow.webContents.send('auth-state', { status: 'authenticated', user: result.user, subscription: result.subscription });
+              setTimeout(() => { if (!mainWindow || mainWindow.isDestroyed()) return; mainWindow.webContents.send('auto-start-capture'); }, 1500);
+            } else if (result.valid) {
+              mainWindow.webContents.send('auth-state', { status: 'no_subscription', user: result.user });
+            }
+          });
+        }
+      } else {
+        res.writeHead(404); res.end();
+      }
+    });
+
+    const tryListen = (port) => {
+      server.listen(port, '0.0.0.0', () => {
+        callbackServer = server;
+        callbackPort = server.address().port;
+        console.log(`[Auth] Callback server on port ${callbackPort}`);
+        resolve(callbackPort);
+      });
+    };
+    server.on('error', () => tryListen(0));
+    tryListen(7789);
+  });
+}
+// ──────────────────────────────────────────────────────────────────────────
 
 // Start Ollama server if not already running
 function startOllama() {
@@ -77,9 +225,49 @@ app.whenReady().then(async () => {
   }
 
   createWindow();
+  startCallbackServer().catch(console.error);
   
   // Open DevTools for debugging (uncomment if needed)
   // mainWindow.webContents.openDevTools({ mode: 'detach' });
+
+  // ── Auth check after page loads ──────────────────────────────────────────
+  mainWindow.webContents.on('did-finish-load', async () => {
+    if (authCheckDone) return;
+    authCheckDone = true;
+
+    mainWindow.webContents.send('auth-state', { status: 'loading' });
+
+    const stored = loadStoredAuth();
+    if (!stored?.token) {
+      mainWindow.webContents.send('auth-state', { status: 'unauthenticated' });
+      return;
+    }
+
+    const result = await checkAuthAndSubscription(stored.token);
+    if (!result.valid) {
+      if (result.error === 'server_unreachable') {
+        mainWindow.webContents.send('auth-state', { status: 'server_error' });
+      } else {
+        clearStoredAuth();
+        mainWindow.webContents.send('auth-state', { status: 'unauthenticated' });
+      }
+      return;
+    }
+
+    saveStoredAuth({ token: stored.token });
+    if (!result.hasSubscription) {
+      mainWindow.webContents.send('auth-state', { status: 'no_subscription', user: result.user });
+    } else {
+      mainWindow.webContents.send('auth-state', { status: 'authenticated', user: result.user, subscription: result.subscription });
+      setTimeout(() => {
+        if (!mainWindow || mainWindow.isDestroyed()) return;
+        mainWindow.webContents.send('auto-start-capture');
+      }, 1500);
+    }
+  });
+
+  // (deep link handler removed — using local HTTP callback server instead)
+  // ─────────────────────────────────────────────────────────────────────────
 
   // Cmd+Enter → AI Answer
   globalShortcut.register('Command+Return', () => {
@@ -155,11 +343,7 @@ app.whenReady().then(async () => {
     mainWindow.webContents.send('scroll-response', 'down');
   });
 
-  // Auto-start listening when app loads (with delay to ensure permissions)
-  setTimeout(() => {
-    if (!mainWindow || mainWindow.isDestroyed()) return;
-    mainWindow.webContents.send('auto-start-capture');
-  }, 2000);
+  // auto-start-capture is sent after successful auth validation
 });
 
 app.on('will-quit', () => {
@@ -284,6 +468,113 @@ ipcMain.handle('transcribe-local', async (event, audioBytes) => {
     return { success: false, error: err.message };
   }
 });
+
+// ── Auth IPC handlers ────────────────────────────────────────────────────
+let childWindow = null;
+
+function openChildWindow(url, title = 'Interview Assistant') {
+  if (childWindow && !childWindow.isDestroyed()) {
+    childWindow.focus();
+    childWindow.loadURL(url);
+    return;
+  }
+  childWindow = new BrowserWindow({
+    width: 480,
+    height: 700,
+    parent: mainWindow,
+    modal: false,
+    title,
+    resizable: false,
+    minimizable: false,
+    fullscreenable: false,
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+    },
+  });
+  childWindow.setMenuBarVisibility(false);
+  childWindow.loadURL(url);
+  childWindow.on('closed', () => { childWindow = null; });
+}
+
+function closeChildWindow() {
+  if (childWindow && !childWindow.isDestroyed()) {
+    childWindow.close();
+    childWindow = null;
+  }
+}
+
+ipcMain.on('open-web-login', async () => {
+  const [cbPort, fePort] = await Promise.all([startCallbackServer(), detectFrontendPort()]);
+  openChildWindow(`http://localhost:${fePort}/signup?electron_port=${cbPort}`, 'Sign Up — Interview Assistant');
+});
+
+ipcMain.on('open-web-plans', async () => {
+  const [cbPort, fePort] = await Promise.all([startCallbackServer(), detectFrontendPort()]);
+  openChildWindow(`http://localhost:${fePort}/plans?electron_port=${cbPort}`, 'Plans — Interview Assistant');
+});
+
+ipcMain.on('electron-logout', () => {
+  clearStoredAuth();
+  authCheckDone = false;
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('auth-state', { status: 'unauthenticated' });
+  }
+});
+
+ipcMain.handle('get-auth-token', () => {
+  const stored = loadStoredAuth();
+  return stored?.token || null;
+});
+
+ipcMain.on('recheck-subscription', async () => {
+  const stored = loadStoredAuth();
+  if (!stored?.token) {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('auth-state', { status: 'unauthenticated' });
+    return;
+  }
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('auth-state', { status: 'loading' });
+  const result = await checkAuthAndSubscription(stored.token);
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (!result.valid) {
+    mainWindow.webContents.send('auth-state', { status: 'unauthenticated' });
+    return;
+  }
+  if (!result.hasSubscription) {
+    mainWindow.webContents.send('auth-state', { status: 'no_subscription', user: result.user });
+  } else {
+    mainWindow.webContents.send('auth-state', { status: 'authenticated', user: result.user, subscription: result.subscription });
+    setTimeout(() => { if (!mainWindow || mainWindow.isDestroyed()) return; mainWindow.webContents.send('auto-start-capture'); }, 1500);
+  }
+});
+
+ipcMain.on('check-auth-after-callback', async (event, { token }) => {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('auth-state', { status: 'loading' });
+  }
+  const result = await checkAuthAndSubscription(token);
+  if (!result.valid) {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('auth-state', { status: 'unauthenticated' });
+    }
+    return;
+  }
+  saveStoredAuth({ token });
+  if (!result.hasSubscription) {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('auth-state', { status: 'no_subscription', user: result.user });
+    }
+  } else {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('auth-state', { status: 'authenticated', user: result.user, subscription: result.subscription });
+      setTimeout(() => {
+        if (!mainWindow || mainWindow.isDestroyed()) return;
+        mainWindow.webContents.send('auto-start-capture');
+      }, 1500);
+    }
+  }
+});
+// ─────────────────────────────────────────────────────────────────────────
 
 // PDF parsing handler - uses pdfjs-dist
 ipcMain.handle('parse-pdf', async (event, buffer) => {

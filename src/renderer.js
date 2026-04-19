@@ -32,6 +32,134 @@ let useLocalWhisper = localStorage.getItem('use_local_whisper') === 'true';
 const GROQ_API_URL = 'https://api.groq.com/openai/v1';
 const OPENAI_API_URL = 'https://api.openai.com/v1';
 
+// ─── Auth State Management ─────────────────────────────────────────────────
+const overlayControls = document.getElementById('overlay-controls');
+// loading-overlay is visible by default via CSS — show controls immediately
+if (overlayControls) overlayControls.style.display = 'flex';
+
+function showOverlay(id) {
+  const el = document.getElementById(id);
+  if (el) el.style.display = 'flex';
+  if (overlayControls) overlayControls.style.display = 'flex';
+}
+function hideOverlay(id) {
+  const el = document.getElementById(id);
+  if (el) el.style.display = 'none';
+}
+function hideAllOverlays() {
+  ['loading-overlay', 'auth-overlay', 'paywall-overlay', 'server-error-overlay'].forEach(hideOverlay);
+  if (overlayControls) overlayControls.style.display = 'none';
+}
+
+ipcRenderer.on('auth-state', (event, state) => {
+  hideAllOverlays();
+  const logoutBtn = document.getElementById('header-logout-btn');
+  if (state.status === 'loading') {
+    showOverlay('loading-overlay');
+    if (logoutBtn) logoutBtn.style.display = 'none';
+  } else if (state.status === 'authenticated') {
+    if (logoutBtn) logoutBtn.style.display = 'inline-flex';
+  } else if (state.status === 'no_subscription') {
+    const el = document.getElementById('paywall-username');
+    if (el) el.textContent = state.user?.username || 'there';
+    showOverlay('paywall-overlay');
+    if (logoutBtn) logoutBtn.style.display = 'none';
+  } else if (state.status === 'unauthenticated') {
+    showOverlay('auth-overlay');
+    if (logoutBtn) logoutBtn.style.display = 'none';
+  } else if (state.status === 'server_error') {
+    showOverlay('server-error-overlay');
+    if (logoutBtn) logoutBtn.style.display = 'none';
+  }
+});
+
+ipcRenderer.on('auth-callback', (event, { token }) => {
+  ipcRenderer.send('check-auth-after-callback', { token });
+});
+
+const loginSubmitBtn = document.getElementById('login-submit-btn');
+const loginEmailInput = document.getElementById('login-email');
+const loginPasswordInput = document.getElementById('login-password');
+const loginError = document.getElementById('login-error');
+
+async function doLogin() {
+  const email = loginEmailInput?.value?.trim();
+  const password = loginPasswordInput?.value;
+  if (!email || !password) {
+    if (loginError) loginError.textContent = 'Please enter email and password.';
+    return;
+  }
+  if (loginError) loginError.textContent = '';
+  if (loginSubmitBtn) { loginSubmitBtn.disabled = true; loginSubmitBtn.textContent = 'Signing in…'; }
+  try {
+    const res = await fetch('http://localhost:5000/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Login failed');
+    ipcRenderer.send('check-auth-after-callback', { token: data.token });
+  } catch (err) {
+    if (loginError) loginError.textContent = err.message;
+  } finally {
+    if (loginSubmitBtn) { loginSubmitBtn.disabled = false; loginSubmitBtn.textContent = 'Sign In'; }
+  }
+}
+
+loginSubmitBtn?.addEventListener('click', doLogin);
+
+// Allow Enter key to submit
+loginPasswordInput?.addEventListener('keydown', (e) => { if (e.key === 'Enter') doLogin(); });
+loginEmailInput?.addEventListener('keydown', (e) => { if (e.key === 'Enter') loginPasswordInput?.focus(); });
+
+document.getElementById('login-signup-btn')?.addEventListener('click', () => {
+  ipcRenderer.send('open-web-login');
+});
+
+document.getElementById('buy-plan-btn')?.addEventListener('click', () => {
+  ipcRenderer.send('open-web-plans');
+});
+
+document.getElementById('logout-btn-paywall')?.addEventListener('click', () => {
+  ipcRenderer.send('electron-logout');
+});
+
+document.getElementById('logout-btn-server')?.addEventListener('click', () => {
+  ipcRenderer.send('electron-logout');
+});
+
+document.getElementById('retry-btn')?.addEventListener('click', () => {
+  showOverlay('loading-overlay');
+  hideOverlay('server-error-overlay');
+  ipcRenderer.invoke('get-auth-token').then((token) => {
+    if (token) {
+      ipcRenderer.send('check-auth-after-callback', { token });
+    } else {
+      ipcRenderer.send('electron-logout');
+    }
+  });
+});
+
+document.getElementById('overlay-minimize-btn')?.addEventListener('click', () => {
+  ipcRenderer.send('minimize-window');
+});
+
+document.getElementById('overlay-close-btn')?.addEventListener('click', () => {
+  ipcRenderer.send('close-window');
+});
+
+document.getElementById('refresh-sub-btn')?.addEventListener('click', () => {
+  ipcRenderer.send('recheck-subscription');
+});
+
+document.getElementById('header-logout-btn')?.addEventListener('click', () => {
+  if (confirm('Logout from Interview Assistant?')) {
+    ipcRenderer.send('electron-logout');
+  }
+});
+// ──────────────────────────────────────────────────────────────────────────
+
 // DOM Elements
 const aiAnswerBtn = document.getElementById('ai-answer-btn');
 const screenshotBtn = document.getElementById('screenshot-btn');
