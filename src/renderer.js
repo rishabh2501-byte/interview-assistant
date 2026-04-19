@@ -197,6 +197,42 @@ console.log('API Key set:', apiKey ? 'Yes' : 'No');
 console.log('Groq Key set:', groqApiKey ? 'Yes' : 'No (get free key from console.groq.com)');
 console.log('User context set:', userContext ? 'Yes (' + userContext.length + ' chars)' : 'No');
 
+// ── Collapsible sections ──
+// Persists open/closed state in localStorage per section
+document.querySelectorAll('.section-header.collapsible').forEach(header => {
+  const targetId = header.dataset.target;
+  const body = document.getElementById(targetId);
+  if (!body) return;
+
+  // Restore saved state
+  const saved = localStorage.getItem('section_' + targetId);
+  if (saved === 'collapsed') {
+    body.classList.add('collapsed');
+    header.classList.add('collapsed');
+  } else if (saved === 'open') {
+    body.classList.remove('collapsed');
+    header.classList.remove('collapsed');
+  }
+
+  header.addEventListener('click', e => {
+    // Don't collapse when clicking buttons/labels inside the header
+    if (e.target.closest('button') || e.target.closest('label') || e.target.closest('input')) return;
+
+    const isNowCollapsed = body.classList.toggle('collapsed');
+    header.classList.toggle('collapsed', isNowCollapsed);
+    localStorage.setItem('section_' + targetId, isNowCollapsed ? 'collapsed' : 'open');
+  });
+});
+
+// Auto-scroll main area to response box when new content is set
+function scrollToResponse() {
+  const mainScroll = document.getElementById('main-scroll');
+  const responseSection = document.getElementById('section-response');
+  if (mainScroll && responseSection) {
+    mainScroll.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+}
+
 // Auto-detect Ollama on startup and enable it if running
 async function autoDetectOllama() {
   try {
@@ -851,6 +887,7 @@ HOW TO ANSWER — STRICT RULES:
     
     responseBox.innerHTML = highlightImportantParts(answer);
     addToResponseHistory(responseBox.innerHTML);
+    scrollToResponse();
     showStatus('✓ Answer ready!', 'success');
     console.log('Conversation history length:', conversationHistory.length);
 
@@ -1033,6 +1070,7 @@ async function captureAndAnalyzeScreenshot() {
     }
 
     addToResponseHistory(responseBox.innerHTML);
+    scrollToResponse();
     showStatus('Screenshot analyzed!', 'success');
 
   } catch (error) {
