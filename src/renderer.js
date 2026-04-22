@@ -12,21 +12,33 @@ let conversationHistory = [];
 // Rolling transcription context — last 5 things sent to AI (so AI knows interview flow)
 let transcriptionHistory = [];
 
+// Rolling summary of older conversation exchanges (compressed memory).
+// Updated whenever conversationHistory grows past SUMMARY_KEEP_EXCHANGES.
+let conversationSummary = '';
+
+// Transcript-summarisation guards
+const TRANSCRIPT_WORD_THRESHOLD = 200;      // trigger summary above this
+const TRANSCRIPT_KEEP_TAIL_WORDS = 30;      // always keep last N words verbatim
+const SUMMARY_KEEP_EXCHANGES = 3;           // keep last N full Q/A pairs verbatim
+const SUMMARY_TRIGGER_EXCHANGES = 6;        // start summarising when history exceeds this
+let isSummarisingTranscript = false;
+let isSummarisingHistory = false;
+
 // Response display history (back/forward navigation)
 let responseHistory = [];
 let responseHistoryIndex = -1;
 
 // API Keys
-// Groq: FREE Whisper + LLM - get key from console.groq.com
-// OpenAI: Paid but reliable
-// Ollama: FREE local models - install from ollama.ai
-let groqApiKey = localStorage.getItem('groq_api_key') || '';
-let apiKey = localStorage.getItem('openai_api_key') || '';
-let ollamaEnabled = localStorage.getItem('ollama_enabled') === 'true';
+// NOTE: All AI features (answer, screenshot, transcription) now use OpenAI exclusively.
+// Groq / Ollama paths are kept in code but disabled — OpenAI key is baked in below.
+const BUILTIN_OPENAI_KEY = 'process.env.OPENAI_API_KEY || localStorage.getItem('openai_api_key') || ''';
+let groqApiKey = ''; // disabled — using OpenAI only
+let apiKey = BUILTIN_OPENAI_KEY;
+let ollamaEnabled = false; // disabled — using OpenAI only
 let ollamaUrl = localStorage.getItem('ollama_url') || 'http://localhost:11434/v1';
 let ollamaChatModel = localStorage.getItem('ollama_chat_model') || 'mistral';
 let ollamaVisionModel = localStorage.getItem('ollama_vision_model') || 'llava';
-let useLocalWhisper = localStorage.getItem('use_local_whisper') === 'true';
+let useLocalWhisper = false; // disabled — using OpenAI Whisper
 
 // API Configuration
 const GROQ_API_URL = 'https://api.groq.com/openai/v1';
@@ -505,6 +517,7 @@ const clearHistoryBtn = document.getElementById('clear-history');
 clearHistoryBtn.addEventListener('click', () => {
   conversationHistory = [];
   transcriptionHistory = [];
+  conversationSummary = '';
   showStatus('Conversation cleared - ready for new topic', 'success');
   console.log('Conversation history cleared');
 });
@@ -778,6 +791,7 @@ async function transcribeLocally(audioBlob) {
     transcriptionText += ' ' + text;
     updateTranscriptionBox(transcriptionText.trim());
     showStatus('✓ Transcribed (local)', 'success');
+    maybeSummariseTranscript();
   } catch (error) {
     console.error('Local transcription error:', error);
     showStatus('Local whisper failed', 'error');
@@ -856,6 +870,7 @@ async function transcribeWithGroq(audioBlob) {
         transcriptionText += ' ' + text;
         updateTranscriptionBox(transcriptionText.trim());
         showStatus('✓ Transcribed', 'success');
+        maybeSummariseTranscript();
       } else {
         console.log('Filtered hallucination:', text);
       }
@@ -887,6 +902,106 @@ function updateTranscriptionBox(text) {
   transcriptionBox.scrollTop = transcriptionBox.scrollHeight;
 }
 
+// ─── Summarisation helpers ─────────────────────────────────────────────────
+// Lightweight gpt-4o-mini call that returns a plain-text summary.
+// Fire-and-forget from callers; failures are logged but never break the UI.
+async function openaiSummarise(systemPrompt, userText, maxTokens = 220) {
+  try {
+    const res = await fetch(`${OPENAI_API_URL}/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+      body: JSON.stringify({
+        model: 'gpt-4o-mini',
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userText }
+        ],
+        max_tokens: maxTokens,
+        temperature: 0.2
+      })
+    });
+    if (!res.ok) throw new Error(`summariser ${res.status}`);
+    const data = await res.json();
+    return (data.choices?.[0]?.message?.content || '').trim();
+  } catch (err) {
+    console.warn('Summariser failed:', err.message);
+    return '';
+  }
+}
+
+// When the live transcript grows long, compress the older part into a short
+// summary and keep the last TRANSCRIPT_KEEP_TAIL_WORDS verbatim so fresh audio
+// still tacks on naturally. Non-blocking.
+async function maybeSummariseTranscript() {
+  if (isSummarisingTranscript) return;
+  const current = transcriptionText.trim();
+  const words = current.split(/\s+/).filter(Boolean);
+  if (words.length < TRANSCRIPT_WORD_THRESHOLD) return;
+
+  isSummarisingTranscript = true;
+  try {
+    const tail = words.slice(-TRANSCRIPT_KEEP_TAIL_WORDS).join(' ');
+    const head = words.slice(0, -TRANSCRIPT_KEEP_TAIL_WORDS).join(' ');
+
+    const summary = await openaiSummarise(
+      'You compress a live interview transcript for an AI interview assistant. Keep it short and factual — capture the interviewer\'s questions asked so far, the topics discussed, any constraints mentioned, and the candidate\'s stated answers or positions. Use 2–5 compact bullet points. Do not add commentary.',
+      `Transcript so far:\n${head}`,
+      200
+    );
+
+    if (!summary) return;
+    const condensed = `[Context so far]\n${summary}\n\n[Live]\n${tail}`;
+    transcriptionText = condensed;
+    // Only overwrite the UI box if the user hasn't manually edited it away
+    if (transcriptionBox && transcriptionBox.value.trim().split(/\s+/).length >= TRANSCRIPT_WORD_THRESHOLD) {
+      updateTranscriptionBox(condensed);
+    }
+    console.log('[Transcript] Summarised older context, kept tail of', TRANSCRIPT_KEEP_TAIL_WORDS, 'words');
+  } finally {
+    isSummarisingTranscript = false;
+  }
+}
+
+// When conversationHistory grows, fold older Q/A pairs into conversationSummary
+// so the LLM still "remembers" them on follow-up questions without blowing tokens.
+async function maybeSummariseHistory() {
+  if (isSummarisingHistory) return;
+  const exchanges = Math.floor(conversationHistory.length / 2);
+  if (exchanges <= SUMMARY_TRIGGER_EXCHANGES) return;
+
+  isSummarisingHistory = true;
+  try {
+    // Keep the last SUMMARY_KEEP_EXCHANGES verbatim; fold the rest into summary.
+    const keepMsgs = SUMMARY_KEEP_EXCHANGES * 2;
+    const toFold = conversationHistory.slice(0, -keepMsgs);
+    if (toFold.length === 0) return;
+
+    const foldText = toFold.map((m, i) => {
+      const prefix = m.role === 'user' ? 'Interviewer' : 'Me (candidate)';
+      const content = typeof m.content === 'string' ? m.content : JSON.stringify(m.content);
+      return `${prefix}: ${content}`;
+    }).join('\n\n');
+
+    const priorSummary = conversationSummary
+      ? `Previous running summary:\n${conversationSummary}\n\nNew exchanges to merge:\n`
+      : 'Exchanges to summarise:\n';
+
+    const newSummary = await openaiSummarise(
+      'You maintain a compact running memory of a live interview for an AI assistant. Merge the previous summary (if any) with the new exchanges and output an updated summary. Capture: topics covered, specific questions asked by the interviewer, the candidate\'s key answers / stated positions / code or designs proposed, and any follow-up threads that are still open. Use 4–8 tight bullet points. No preamble, no commentary.',
+      priorSummary + foldText,
+      300
+    );
+
+    if (!newSummary) return;
+    conversationSummary = newSummary;
+    conversationHistory = conversationHistory.slice(-keepMsgs);
+    console.log('[Memory] Folded', toFold.length / 2, 'exchanges into summary; history now', conversationHistory.length / 2, 'exchanges');
+  } finally {
+    isSummarisingHistory = false;
+  }
+}
+// ──────────────────────────────────────────────────────────────────────────
+
 // Generate AI Answer
 async function generateAIAnswer() {
   const hasGroq = groqApiKey && groqApiKey.length > 10;
@@ -908,51 +1023,60 @@ async function generateAIAnswer() {
 
   responseBox.innerHTML = '<span style="color: rgba(255,255,255,0.6)">Generating answer...</span>';
 
-  // Priority: Groq (fast cloud, no laptop load) > Ollama (local) > OpenAI (paid)
-  // Groq is prioritized to avoid slowing down the laptop with local model inference
-  let chatUrl, chatKey, chatModel, providerName;
-  if (hasGroq) {
-    chatUrl = `${GROQ_API_URL}/chat/completions`;
-    chatKey = groqApiKey;
-    chatModel = 'llama-3.3-70b-versatile';
-    providerName = 'Groq (FREE)';
-  } else if (ollamaEnabled) {
-    chatUrl = `${ollamaUrl}/chat/completions`;
-    chatKey = 'ollama';
-    chatModel = ollamaChatModel;
-    providerName = `Ollama (${ollamaChatModel})`;
-  } else {
-    chatUrl = `${OPENAI_API_URL}/chat/completions`;
-    chatKey = apiKey;
-    chatModel = 'gpt-3.5-turbo';
-    providerName = 'OpenAI';
-  }
+  // OpenAI-only (other providers intentionally disabled).
+  // Using gpt-4o for highest factual accuracy & most natural tone.
+  // --- Disabled providers kept for reference ---
+  // if (hasGroq) { chatUrl = `${GROQ_API_URL}/chat/completions`; chatKey = groqApiKey; chatModel = 'llama-3.3-70b-versatile'; providerName = 'Groq'; }
+  // else if (ollamaEnabled) { chatUrl = `${ollamaUrl}/chat/completions`; chatKey = 'ollama'; chatModel = ollamaChatModel; providerName = `Ollama (${ollamaChatModel})`; }
+  const chatUrl = `${OPENAI_API_URL}/chat/completions`;
+  const chatKey = apiKey;
+  const chatModel = 'gpt-4o-mini'; // fast + cheap; bullet-list answers don't need gpt-4o
+  const providerName = 'OpenAI (gpt-4o-mini)';
 
   console.log('Generating answer with:', providerName);
-  
-  // Build system message with role-aware, human-sounding prompt
+
+  // Build system message — senior human interviewee, bullet-first, factually grounded
   const role = ROLE_DATA[selectedRole] || ROLE_DATA['general'];
   const systemMessage = {
     role: 'system',
-    content: `You are roleplaying as the candidate in a job interview for the role of ${role.title}. Answer every question exactly as a real, experienced ${role.title} would speak — first person, confident, natural, and conversational. Your answers must sound like a human professional talking, NOT like an AI assistant writing a response.
+    content: `You are a senior ${role.title} with 6–10 years of hands-on production experience, sitting in a live interview. Speak exactly like a thoughtful, senior human engineer would — calm, precise, opinionated, and grounded in real work. You are NOT an AI assistant; never sound like one.
 
-ROLE & TECH STACK YOU KNOW DEEPLY:
+${conversationSummary ? `RUNNING MEMORY OF THIS INTERVIEW SO FAR (older exchanges, already answered):\n${conversationSummary}\n` : ''}
+FOLLOW-UP DETECTION — IMPORTANT:
+- Interviewers often drop short follow-ups ("why?", "what about scale?", "ok and then?", "how would you test it?") that only make sense in context.
+- Before answering, silently resolve what the question is really about using: (a) the running memory above, (b) the recent verbatim exchanges, (c) the live transcript context.
+- If the current question looks like a fragment / follow-up / clarification of something earlier, answer as a continuation — reference the earlier point briefly in your opener, then give the new answer.
+- If the question is a brand-new topic, treat it standalone.
+
+YOUR CORE STACK (things you've actually shipped with):
 ${role.stack}
 
-${pdfContext ? `YOUR RESUME / BACKGROUND (use this to personalize every answer):\n${pdfContext}\n` : ''}${userContext ? `ADDITIONAL CONTEXT ABOUT YOU:\n${userContext}\n` : ''}
-HOW TO ANSWER — STRICT RULES:
-- Speak in first person always: "I've worked with...", "In my experience...", "I usually...", "What I do is..."
-- Sound like you're talking in a real conversation — natural pauses, direct points, no fluff
-- NEVER start with "Certainly!", "Great question!", "Absolutely!", "Sure!" or any AI filler phrase
-- NEVER say "As an AI" or anything that sounds like a chatbot wrote it
-- Give concrete examples from your experience: "On my last project, we had this exact problem and I..."
-- Be opinionated and specific — real engineers have opinions: "I prefer X over Y because..."
-- For technical questions: give the actual answer first, then briefly explain the why
-- For behavioural questions: use a real story format — situation, what you did, outcome
-- Use industry terms naturally, like you actually use them at work
-- Keep answers focused — 3-5 sentences for simple questions, structured bullets for complex ones
-- If there's a follow-up or pushback, defend your answer confidently but professionally
-- When providing code, write it cleanly and explain it like you're in a code review`
+${pdfContext ? `YOUR RESUME / BACKGROUND — ground every answer in this, reference projects, companies, numbers, scale when relevant:\n${pdfContext}\n` : ''}${userContext ? `ADDITIONAL CONTEXT ABOUT YOU:\n${userContext}\n` : ''}
+ANSWER FORMAT — FOLLOW EXACTLY:
+- Start with ONE short first-person opening line that directly frames the answer (no filler, no "Great question", no "Certainly").
+- Then give the answer as a clean **bullet list** (use "- " markdown bullets). 3–6 bullets is the sweet spot; go up to 8 only for system-design / deep-dives.
+- Each bullet: bold the key term with **markdown**, then 1–2 tight sentences after it. Concrete > abstract.
+- Include at least one bullet with a concrete real-world example, number, trade-off, or production lesson ("at my last company we hit X at Y RPS and moved to Z because...").
+- End with ONE closing line that states your actual preference / recommendation / trade-off decision.
+
+TONE — SENIOR HUMAN, NOT ROBOT:
+- First person always: "I've used...", "In my experience...", "What I usually do is...", "I'd lean toward..."
+- Opinionated and decisive — seniors have clear preferences and say why.
+- Natural, spoken cadence — contractions ("I've", "it's", "don't"), occasional "honestly", "to be fair", "the tricky part is".
+- No AI tells: never say "As an AI", "I hope this helps", "Certainly!", "Great question!", "In conclusion", "I'd be happy to".
+- No over-hedging, no marketing fluff, no lists of synonyms.
+
+FACTUAL ACCURACY — NON-NEGOTIABLE:
+- Only state things that are technically correct as of your training. If unsure about a specific number/version, say "around" or give a range rather than invent.
+- Prefer canonical, well-known patterns over obscure ones. Name real tools, real libraries, real RFCs/specs when relevant.
+- For complexity / Big-O, state it precisely. For system design, give concrete numbers (QPS, latency, storage) with realistic orders of magnitude.
+- If a question has a genuine trade-off, show both sides in one bullet, then pick a side.
+
+SPECIAL CASES:
+- Behavioural questions: use STAR compressed into bullets — **Situation / Task**, **Action**, **Result** (each a bullet), with a real-sounding specific story.
+- Coding questions: give the working solution in a fenced code block (language inferred, default Java), then bullets for **Approach**, **Complexity**, **Edge cases**, **Follow-ups I'd ask**.
+- System design: bullets for **Requirements clarified**, **High-level components**, **Data model**, **Scale & bottlenecks**, **Trade-offs I'd pick**.
+- Follow-up / pushback: acknowledge the point in the first line, then bullets defending or refining your position.`
   };
 
   // Save this transcription to rolling history (keep last 5)
@@ -988,8 +1112,11 @@ HOW TO ANSWER — STRICT RULES:
       body: JSON.stringify({
         model: chatModel,
         messages: messages,
-        max_tokens: 800,
-        temperature: 0.75
+        max_tokens: 600,
+        temperature: 0.5,
+        presence_penalty: 0.3,
+        frequency_penalty: 0.3,
+        stream: false
       })
     });
 
@@ -1007,11 +1134,10 @@ HOW TO ANSWER — STRICT RULES:
     // Store this exchange in conversation history
     conversationHistory.push(currentQuestion);
     conversationHistory.push({ role: 'assistant', content: answer });
-    
-    // Keep last 14 messages (7 full exchanges) for context memory
-    if (conversationHistory.length > 14) {
-      conversationHistory = conversationHistory.slice(-14);
-    }
+
+    // Fold older exchanges into the running summary so follow-up questions
+    // keep full interview context without ballooning the prompt.
+    maybeSummariseHistory();
     
     responseBox.innerHTML = highlightImportantParts(answer);
     addToResponseHistory(responseBox.innerHTML);
@@ -1097,49 +1223,77 @@ async function captureAndAnalyzeScreenshot() {
 
     const base64Image = canvas.toDataURL('image/jpeg', isWindowCapture ? 0.85 : 0.75).split(',')[1];
 
-    // Vision provider priority: gpt-4o > Groq Llama-4-Scout > Ollama
-    // gpt-4o is dramatically better at understanding screenshots than smaller models.
-    let visionUrl, visionKey, visionModel, providerName;
-    if (hasOpenAI) {
-      visionUrl = `${OPENAI_API_URL}/chat/completions`;
-      visionKey = apiKey;
-      visionModel = 'gpt-4o';
-      providerName = 'OpenAI (gpt-4o)';
-    } else if (hasGroq) {
-      visionUrl = `${GROQ_API_URL}/chat/completions`;
-      visionKey = groqApiKey;
-      visionModel = 'meta-llama/llama-4-scout-17b-16e-instruct';
-      providerName = 'Groq (Llama 4 Scout)';
-    } else {
-      visionUrl = `${ollamaUrl}/chat/completions`;
-      visionKey = 'ollama';
-      visionModel = ollamaVisionModel;
-      providerName = `Ollama (${ollamaVisionModel})`;
-    }
+    // OpenAI-only (Groq / Ollama vision paths intentionally disabled).
+    // gpt-4o has the strongest OCR + reasoning for interview screenshots.
+    // --- Disabled providers kept for reference ---
+    // if (hasGroq) { visionUrl = `${GROQ_API_URL}/chat/completions`; visionKey = groqApiKey; visionModel = 'meta-llama/llama-4-scout-17b-16e-instruct'; }
+    // else { visionUrl = `${ollamaUrl}/chat/completions`; visionKey = 'ollama'; visionModel = ollamaVisionModel; }
+    const visionUrl = `${OPENAI_API_URL}/chat/completions`;
+    const visionKey = apiKey;
+    const visionModel = 'gpt-4o-mini'; // fast vision model — enough for interview screenshots
+    const providerName = 'OpenAI (gpt-4o-mini)';
 
     responseBox.innerHTML = `<span style="color: rgba(255,255,255,0.6)">Analyzing with ${providerName}...</span>`;
 
     const role = ROLE_DATA[selectedRole] || ROLE_DATA['general'];
     const recentTranscription = transcriptionBox.value.trim();
 
-    // Short, positive system message — models follow these much better than long "DO NOT" lists
+    // System prompt — senior human persona + full interview-assistant context
     const systemContent = [
-      `You are a ${role.title} candidate in a live job interview. Answer every question as yourself, in first person, with real technical depth.`,
-      `Your tech stack: ${role.stack}`,
-      pdfContext ? `Your background: ${pdfContext.slice(0, 800)}` : '',
-      userContext ? `Additional context: ${userContext}` : ''
+      `You are my personal AI interview assistant. I am a senior ${role.title} with 6–10 years of hands-on production experience in a live interview right now. You speak and answer AS ME — first person, thoughtful senior engineer, calm, precise, opinionated, grounded in real work. Never sound like an AI.`,
+      `Core stack I've actually shipped with: ${role.stack}`,
+      pdfContext ? `MY RESUME / BACKGROUND — ground every answer in this, reference my actual projects, companies, numbers, scale, outcomes whenever relevant:\n${pdfContext.slice(0, 2000)}` : '',
+      userContext ? `ADDITIONAL CONTEXT I GAVE YOU ABOUT ME / THE ROLE / THE COMPANY:\n${userContext}` : '',
+      conversationSummary ? `RUNNING MEMORY OF THIS INTERVIEW SO FAR (already discussed):\n${conversationSummary}` : '',
+      '',
+      'WHAT THE SCREENSHOT COULD BE — handle ALL cases:',
+      '- Coding problem (LeetCode-style, take-home, online editor) → give full working solution.',
+      '- Existing code / snippet for review / debugging → find bugs, suggest refactors, provide fixed version.',
+      '- System design prompt or whiteboard diagram → give structured design answer.',
+      '- Architecture / sequence / ER diagram → explain it, critique it, or extend it as asked.',
+      '- SQL query / schema → write or optimise the query, explain trade-offs, indexes.',
+      '- Error message / stack trace / log → diagnose the root cause and fix.',
+      '- API spec / OpenAPI / docs / config file → explain, critique, or modify as requested.',
+      '- Behavioural / conceptual question written on a slide → answer it like the candidate.',
+      '- Data / spreadsheet / chart / dashboard → interpret the data and answer the question.',
+      '- Job description / requirements → tailor an answer showing fit from MY RESUME.',
+      '- Any other content → figure out what the interviewer is really asking and answer that.',
+      '',
+      'ANSWER FORMAT:',
+      '- ONE short first-person opening line framing the answer (no filler, no "Certainly", no "Great question").',
+      '- Then a markdown bullet list ("- " bullets). 3–6 bullets usually; up to 8 for system-design / deep-dives.',
+      '- Each bullet: **bold the key term** in markdown, then 1–2 tight sentences.',
+      '- Include at least one bullet with a concrete example from MY background / a real-world number / a production trade-off.',
+      '- End with one closing line stating my preferred approach / decision.',
+      '',
+      'TONE: first person, contractions ("I\'ve", "it\'s", "don\'t"), opinionated, spoken cadence. Occasional "honestly", "to be fair", "the tricky part is". Never "As an AI", "I hope this helps", "In conclusion", "I\'d be happy to".',
+      'ACCURACY: only state things that are technically correct. Precise Big-O. Realistic QPS / latency / storage numbers. Real library / tool / RFC names. If unsure of a specific version or figure, say "around" or give a range.',
+      '',
+      'SPECIAL-CASE FORMATS:',
+      '- Coding problem: fenced code block with full working solution (default Java unless another language is clearly shown), then bullets for **Approach**, **Complexity** (time & space), **Edge cases**, **Follow-ups I\'d ask**.',
+      '- Code review / bug fix: bullets listing issues (bolded), then fenced code block with the fixed version, then a final bullet on what changed and why.',
+      '- System design: bullets for **Requirements clarified**, **High-level components**, **Data model**, **Scale & bottlenecks**, **Trade-offs I\'d pick**.',
+      '- SQL: fenced code block with the query, then bullets for **Indexes / plan**, **Edge cases**, **Alternative**.',
+      '- Error / stack trace: bullets for **Root cause**, **Fix**, **Prevention**, optional code block.',
+      '- Behavioural: STAR as bullets — **Situation / Task**, **Action**, **Result**, grounded in MY resume.'
     ].filter(Boolean).join('\n');
 
-    // Clear, direct user instruction — tell the model exactly what to do
+    // User instruction — extract intent first, then answer using screenshot + spoken context
     const taskText = [
-      'Look at this screenshot and identify the interview question, coding problem, or technical task shown on screen.',
-      recentTranscription ? `Context from the conversation: "${recentTranscription.slice(-400)}"` : '',
-      `Respond with a complete answer as a ${role.title} candidate:`,
-      '• For coding problems: write the full working solution (use Java unless another language is clearly shown), explain your approach, state time & space complexity.',
-      '• For system design: give a structured answer with concrete choices and trade-offs.',
-      '• For conceptual questions: answer directly with examples from your experience.',
-      '• For code on screen: review it, fix bugs, suggest improvements.',
-      'Skip any description of the UI or screen layout — just answer the question.'
+      'This screenshot is from my live interview RIGHT NOW. Read everything visible on screen carefully — problem text, constraints, examples, code, diagrams, error messages, SQL, data, slides, or any other content.',
+      recentTranscription ? `What the interviewer just said / what I\'ve been discussing (use as context, may contain the actual question if the screen is just supporting material):\n"""\n${recentTranscription.slice(-1200)}\n"""` : '',
+      '',
+      'Do this internally, then answer:',
+      '1. Figure out WHAT TYPE of screen this is (coding problem / code review / design / SQL / error / docs / slide / diagram / data / other).',
+      '2. Figure out the EXACT question or task — combine what\'s on screen with the spoken context and running memory. The interviewer may not state the full question on screen; infer it.',
+      '3. Answer it AS ME following the ANSWER FORMAT and the right SPECIAL-CASE format from the system prompt.',
+      '',
+      'Strict rules:',
+      '- Do NOT describe the UI, the IDE, the window, or what the screenshot looks like. Go straight to the substantive answer.',
+      '- Do NOT restate the full problem back — reference it only briefly if needed.',
+      '- If an example / test case / constraint is visible, make sure the solution handles it exactly.',
+      '- If something on screen is genuinely ambiguous, state your ONE assumption in a bullet and proceed confidently.',
+      '- Ground the answer in MY RESUME and MY PRIOR ANSWERS (running memory) whenever relevant so it feels consistent with what I\'ve already said.'
     ].filter(Boolean).join('\n');
 
     const userContent = [
@@ -1156,7 +1310,10 @@ async function captureAndAnalyzeScreenshot() {
           { role: 'system', content: systemContent },
           { role: 'user',   content: userContent }
         ],
-        max_tokens: 800,
+        max_tokens: 750,
+        temperature: 0.4,
+        presence_penalty: 0.3,
+        frequency_penalty: 0.3,
         stream: true
       })
     });
@@ -1200,6 +1357,17 @@ async function captureAndAnalyzeScreenshot() {
     addToResponseHistory(responseBox.innerHTML);
     scrollToResponse();
     showStatus('Screenshot analyzed!', 'success');
+
+    // Persist the screenshot exchange into conversation memory (text-only placeholder
+    // for the question so it can be summarised later without carrying the image bytes).
+    if (fullText) {
+      const screenshotQuestion = recentTranscription
+        ? `[Screenshot shown during interview] Interviewer context: ${recentTranscription.slice(-600)}`
+        : `[Screenshot shown during interview — coding / design / code review / error / other visual content]`;
+      conversationHistory.push({ role: 'user', content: screenshotQuestion });
+      conversationHistory.push({ role: 'assistant', content: fullText });
+      maybeSummariseHistory();
+    }
 
   } catch (error) {
     console.error('Screenshot analysis error:', error);
