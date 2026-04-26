@@ -26,53 +26,73 @@
 
     <div id="auth-overlay" class="auth-overlay" style="display:none;">
       <div class="auth-card">
-        <div class="auth-logo">🎯</div>
+        <div class="auth-logo"><span class="logo-dot lg"></span></div>
         <h2 class="auth-title">Interview Assistant</h2>
-        <p class="auth-subtitle">Sign in to your account</p>
-        <input type="email" id="login-email" class="auth-input" placeholder="Email address" autocomplete="email" />
+        <p class="auth-subtitle">Sign in to continue</p>
+        <input type="email" id="login-email" class="auth-input" placeholder="Email" autocomplete="email" />
         <input type="password" id="login-password" class="auth-input" placeholder="Password" autocomplete="current-password" />
         <p id="login-error" class="auth-error"></p>
         <button class="auth-btn" id="login-submit-btn">Sign In</button>
-        <button class="auth-btn-secondary" id="login-signup-btn">🌐 Create account on web</button>
+        <button class="auth-btn-secondary" id="login-signup-btn">Create account on web</button>
       </div>
     </div>
 
     <div id="paywall-overlay" class="auth-overlay" style="display:none;">
       <div class="auth-card">
-        <div class="auth-logo">⚡</div>
+        <div class="auth-logo"><span class="logo-dot lg"></span></div>
         <h2 class="auth-title">No Active Plan</h2>
-        <p class="auth-subtitle">Hi <span id="paywall-username">there</span>! Purchase a plan on the web to unlock the interview assistant.</p>
-        <button class="auth-btn" id="buy-plan-btn">💳 Buy a Plan</button>
-        <button class="auth-btn-secondary" id="refresh-sub-btn">🔄 Already Purchased? Refresh</button>
+        <p class="auth-subtitle">Hi <span id="paywall-username">there</span> — purchase a plan on the web to unlock the assistant.</p>
+        <button class="auth-btn" id="buy-plan-btn">Buy a Plan</button>
+        <button class="auth-btn-secondary" id="refresh-sub-btn">Already purchased — Refresh</button>
         <button class="auth-btn-secondary" id="logout-btn-paywall">Logout</button>
       </div>
     </div>
 
     <div id="server-error-overlay" class="auth-overlay" style="display:none;">
       <div class="auth-card">
-        <div class="auth-logo">⚠️</div>
+        <div class="auth-logo"><span class="logo-dot lg warn"></span></div>
         <h2 class="auth-title">Server Offline</h2>
         <p class="auth-subtitle">Backend not reachable on port 5000. Start the server and retry.</p>
-        <button class="auth-btn" id="retry-btn">🔄 Retry Connection</button>
+        <button class="auth-btn" id="retry-btn">Retry Connection</button>
         <button class="auth-btn-secondary" id="logout-btn-server">Clear &amp; Logout</button>
       </div>
     </div>
     <!-- ── end Auth Overlays ── -->
 
-    <!-- Fixed Header (drag handle) -->
+    <!-- Header (drag handle) -->
     <div class="header" id="drag-handle">
       <div class="title">
-        <span class="icon">🎯</span>
-        <span>Interview Assistant</span>
+        <span class="logo-dot"></span>
+        <span class="title-text">Interview Assistant</span>
       </div>
       <div class="controls">
+        <!-- Output mode selector: Desktop / Mobile / Both -->
+        <div class="mode-switch" id="mode-switch" title="Where AI answers appear">
+          <button class="mode-opt active"     data-mode="desktop" title="Desktop only">D</button>
+          <button class="mode-opt"            data-mode="both"    title="Desktop + Mobile">D+M</button>
+          <button class="mode-opt"            data-mode="mobile"  title="Mobile only (stealth)">M</button>
+        </div>
+        <button class="control-btn pair" id="pair-mobile-btn" title="Pair mobile device">⇆</button>
+        <span class="peer-dot" id="peer-dot" title="Mobile not connected"></span>
         <button class="control-btn logout" id="header-logout-btn" title="Logout" style="display:none;">⏻</button>
-        <button class="control-btn minimize" id="minimize-btn">−</button>
-        <button class="control-btn close" id="close-btn">×</button>
+        <button class="control-btn minimize" id="minimize-btn" title="Minimize">−</button>
+        <button class="control-btn close" id="close-btn" title="Close">×</button>
       </div>
     </div>
 
-    <!-- Fixed Status Bar -->
+    <!-- Pair Mobile Modal -->
+    <div id="pair-modal" class="pair-modal" style="display:none;">
+      <div class="pair-card">
+        <button class="pair-close" id="pair-close-btn" title="Close">×</button>
+        <h3 class="pair-title">Pair your phone</h3>
+        <p class="pair-subtitle">Scan this QR on your phone. AI answers will stream to it live.</p>
+        <div class="pair-qr" id="pair-qr"></div>
+        <div class="pair-url" id="pair-url">generating…</div>
+        <p class="pair-hint">Code expires in <span id="pair-expires">5</span> min. Reopen this panel to refresh.</p>
+      </div>
+    </div>
+
+    <!-- Status Bar -->
     <div class="status-bar">
       <div class="status-indicator" id="status-indicator">
         <span class="dot"></span>
@@ -80,20 +100,22 @@
       </div>
       <div class="listening-indicator" id="listening-indicator">
         <span class="pulse"></span>
-        <span>Listening...</span>
+        <span>Listening</span>
       </div>
     </div>
 
-    <!-- Fixed Action Buttons -->
+    <!-- Action Buttons -->
     <div class="button-row">
-      <button class="compact-btn ai" id="ai-answer-btn" title="Cmd+Enter">
-        🤖 Answer
+      <button class="compact-btn ai primary" id="ai-answer-btn" title="Cmd+Enter">
+        <span class="btn-label">Answer</span>
+        <span class="btn-kbd">⌘↵</span>
       </button>
       <button class="compact-btn ss" id="screenshot-btn" title="Cmd+Shift+Enter">
-        📸 Screenshot
+        <span class="btn-label">Screenshot</span>
+        <span class="btn-kbd">⌘⇧↵</span>
       </button>
-      <button class="compact-btn mic" id="capture-btn">
-        🎤 Listen
+      <button class="compact-btn mic" id="capture-btn" title="Toggle listening">
+        <span class="btn-label">Listen</span>
       </button>
     </div>
 
@@ -131,56 +153,56 @@
     <div class="main-scroll" id="main-scroll">
 
       <!-- AI Response Section (primary, always expanded) -->
-      <div class="section" id="section-response">
+      <div class="section section-primary" id="section-response">
         <div class="section-header collapsible" data-target="response-body">
-          <span>🤖 AI Response</span>
+          <span class="section-title">Answer</span>
           <div class="section-actions">
-            <button class="nav-btn" id="response-back-btn" title="Previous" disabled>◀</button>
-            <button class="nav-btn" id="response-forward-btn" title="Next" disabled>▶</button>
-            <button class="clear-btn" id="clear-history" title="Clear conversation">New Topic</button>
-            <button class="clear-btn" id="clear-response">Clear</button>
-            <button class="copy-btn" id="copy-response">Copy</button>
-            <span class="collapse-icon">▼</span>
+            <button class="nav-btn" id="response-back-btn" title="Previous" disabled>‹</button>
+            <button class="nav-btn" id="response-forward-btn" title="Next" disabled>›</button>
+            <button class="clear-btn" id="clear-history" title="Clear conversation">New</button>
+            <button class="clear-btn" id="clear-response" title="Clear answer">Clear</button>
+            <button class="copy-btn" id="copy-response" title="Copy">Copy</button>
+            <span class="collapse-icon">▾</span>
           </div>
         </div>
         <div class="section-body" id="response-body">
           <div class="response-box" id="response-box" contenteditable="true"
-               data-placeholder="Press Cmd+Enter for AI answer, or Cmd+Shift+Enter for screenshot analysis..."></div>
+               data-placeholder="Press ⌘↵ for AI answer, or ⌘⇧↵ for screenshot analysis"></div>
         </div>
       </div>
 
       <!-- Transcription Section (collapsible) -->
       <div class="section" id="section-transcription">
         <div class="section-header collapsible" data-target="transcription-body">
-          <span>🎙️ Transcription</span>
+          <span class="section-title">Transcript</span>
           <div class="section-actions">
             <button class="clear-btn" id="clear-transcript">Clear</button>
-            <span class="collapse-icon">▼</span>
+            <span class="collapse-icon">▾</span>
           </div>
         </div>
         <div class="section-body" id="transcription-body">
           <textarea class="transcription-box" id="transcription-box"
-                    placeholder="Audio will be transcribed here in real-time..."></textarea>
+                    placeholder="Live transcription appears here…"></textarea>
         </div>
       </div>
 
       <!-- Context Section (collapsible, collapsed by default) -->
       <div class="section" id="section-context">
         <div class="section-header collapsible collapsed" data-target="context-body">
-          <span>📝 Your Context</span>
+          <span class="section-title">Context</span>
           <div class="section-actions">
             <label class="pdf-upload-btn" title="Upload Resume PDF">
-              📄 PDF
+              PDF
               <input type="file" id="pdf-upload" accept=".pdf" style="display:none;">
             </label>
             <button class="save-btn-small" id="save-context">Save</button>
-            <span class="collapse-icon">▶</span>
+            <span class="collapse-icon">▸</span>
           </div>
         </div>
         <div class="section-body collapsed" id="context-body">
           <div class="pdf-status" id="pdf-status"></div>
           <textarea id="user-context"
-                    placeholder="Paste resume, skills, experience here — or upload a PDF. AI uses this to personalise answers."></textarea>
+                    placeholder="Paste resume, skills, or context — or upload a PDF. Used to personalise answers."></textarea>
         </div>
       </div>
 
@@ -188,51 +210,8 @@
       <div class="settings-panel" id="settings-panel">
 
         <div class="setting-group">
-          <div class="setting-group-title">Ollama — Local &amp; Free (Auto-detected)</div>
-          <div class="setting-item setting-item-row">
-            <label style="flex:1;">Enable Ollama</label>
-            <input type="checkbox" id="ollama-enabled" style="width:auto;accent-color:#a78bfa;">
-          </div>
-          <div class="setting-item">
-            <label>Ollama URL:</label>
-            <input type="text" id="ollama-url-input" placeholder="http://localhost:11434/v1">
-          </div>
-          <div class="setting-item">
-            <label>Chat Model:</label>
-            <input type="text" id="ollama-chat-model-input" placeholder="mistral">
-          </div>
-          <div class="setting-item">
-            <label>Vision Model (screenshots):</label>
-            <input type="text" id="ollama-vision-model-input" placeholder="llava">
-          </div>
-          <small style="color:rgba(255,255,255,0.4);font-size:10px;">
-            Ollama auto-starts with the app &nbsp;|&nbsp; Pull: <b>ollama pull mistral</b> &amp; <b>ollama pull llava</b>
-          </small>
-        </div>
-
-        <div class="setting-group">
-          <div class="setting-group-title">Local Whisper — Unlimited Free Transcription</div>
-          <div class="setting-item setting-item-row">
-            <label style="flex:1;">Use Local Whisper</label>
-            <input type="checkbox" id="local-whisper-enabled" style="width:auto;accent-color:#34d399;">
-          </div>
-          <small style="color:rgba(255,255,255,0.4);font-size:10px;">
-            Downloads ~145 MB model on first use. No API key, no limits, works offline.
-          </small>
-        </div>
-
-        <div class="setting-group">
-          <div class="setting-group-title">Cloud API Keys</div>
-          <div class="setting-item">
-            <label>Groq API Key (free — transcription + AI):</label>
-            <input type="password" id="groq-key-input" placeholder="gsk_...">
-            <small style="color:rgba(255,255,255,0.4);font-size:10px;">Free key at console.groq.com — no credit card</small>
-          </div>
-          <div class="setting-item">
-            <label>OpenAI API Key (best screenshot analysis):</label>
-            <input type="password" id="api-key-input" placeholder="sk-...">
-            <small style="color:rgba(255,255,255,0.4);font-size:10px;">Uses GPT-4o for screenshots if set</small>
-          </div>
+          <div class="setting-group-title">AI Provider</div>
+          <div class="setting-note">Powered by OpenAI (gpt-4o-mini). Answer, screenshot analysis & transcription all use a single managed key — no setup required.</div>
         </div>
 
         <div class="setting-group">
@@ -254,16 +233,27 @@
           </div>
         </div>
 
-        <button class="save-btn" id="save-api-key">Save Settings</button>
+        <!-- Hidden legacy fields kept so renderer.js references don't break -->
+        <div style="display:none;" aria-hidden="true">
+          <input type="checkbox" id="ollama-enabled">
+          <input type="text" id="ollama-url-input">
+          <input type="text" id="ollama-chat-model-input">
+          <input type="text" id="ollama-vision-model-input">
+          <input type="checkbox" id="local-whisper-enabled">
+          <input type="password" id="groq-key-input">
+          <input type="password" id="api-key-input">
+        </div>
+
+        <button class="save-btn" id="save-api-key">Save</button>
       </div>
 
     </div><!-- end .main-scroll -->
 
     <!-- Fixed Footer -->
     <div class="footer">
-      <button class="settings-toggle" id="settings-toggle">⚙️ Settings</button>
+      <button class="settings-toggle" id="settings-toggle" title="Settings">Settings</button>
       <div class="opacity-control">
-        <span class="opacity-label">👁</span>
+        <span class="opacity-label">Opacity</span>
         <input type="range" id="opacity-slider" min="20" max="100" value="100" step="5" class="opacity-slider">
         <span class="opacity-value" id="opacity-value">100%</span>
       </div>

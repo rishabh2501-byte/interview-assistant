@@ -4,9 +4,23 @@ const authMiddleware = require('../middleware/auth');
 
 const router = express.Router();
 
-// GET /api/plans - list all plans (public)
+// GET /api/plans?type=SUBSCRIPTION|TOPUP  (both if omitted)
+// Returns only plans where is_active = TRUE. Sorted: subscriptions first, then top-ups, both cheap→expensive.
 router.get('/', async (req, res) => {
-  const result = await pool.query('SELECT * FROM plans ORDER BY price ASC');
+  const { type } = req.query;
+  const params = [];
+  let where = 'WHERE is_active = TRUE';
+  if (type === 'SUBSCRIPTION' || type === 'TOPUP') {
+    params.push(type);
+    where += ` AND plan_type = $${params.length}`;
+  }
+  const result = await pool.query(
+    `SELECT id, name, price, duration_days, sessions_included, plan_type, description
+       FROM plans
+       ${where}
+       ORDER BY (plan_type = 'TOPUP') ASC, price ASC`,
+    params
+  );
   res.json({ plans: result.rows });
 });
 

@@ -1,9 +1,11 @@
 const { app, BrowserWindow, ipcMain, desktopCapturer, globalShortcut, screen, systemPreferences, shell } = require('electron');
 const http = require('http');
+const https = require('https');
 const path = require('path');
 const fs = require('fs');
 const { exec, spawn } = require('child_process');
 const os = require('os');
+const appConfig = require('./config');
 
 // Prevent Chromium's window capture feature from bypassing content protection
 app.commandLine.appendSwitch('disable-features', 'WindowCaptureMacV2');
@@ -35,10 +37,14 @@ function clearStoredAuth() {
 function apiGet(apiPath, token) {
   return new Promise((resolve, reject) => {
     const options = {
-      hostname: 'localhost', port: 5000, path: apiPath, method: 'GET',
+      hostname: appConfig.backendHost,
+      port: appConfig.backendPort,
+      path: apiPath,
+      method: 'GET',
       headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) }
     };
-    const req = http.request(options, (res) => {
+    const transport = appConfig.backendProtocol === 'https:' ? https : http;
+    const req = transport.request(options, (res) => {
       let data = '';
       res.on('data', (c) => (data += c));
       res.on('end', () => {
@@ -67,14 +73,14 @@ async function checkAuthAndSubscription(token) {
 function detectFrontendPort() {
   return new Promise((resolve) => {
     let found = false;
-    const ports = [5173, 5174, 5175, 3000];
+    const ports = appConfig.devFrontendPorts;
     let checked = 0;
     ports.forEach((port) => {
       const req = http.get(`http://localhost:${port}`, (res) => {
         if (!found) { found = true; resolve(port); }
       });
-      req.on('error', () => { checked++; if (checked === ports.length && !found) resolve(5173); });
-      req.setTimeout(600, () => { req.destroy(); checked++; if (checked === ports.length && !found) resolve(5173); });
+      req.on('error', () => { checked++; if (checked === ports.length && !found) resolve(ports[0]); });
+      req.setTimeout(600, () => { req.destroy(); checked++; if (checked === ports.length && !found) resolve(ports[0]); });
     });
   });
 }
@@ -154,7 +160,7 @@ function startCallbackServer() {
       });
     };
     server.on('error', () => tryListen(0));
-    tryListen(7789);
+    tryListen(appConfig.internalCallbackPort);
   });
 }
 // ──────────────────────────────────────────────────────────────────────────
@@ -419,6 +425,29 @@ ipcMain.on('resize-window', (event, { width, height, x, y }) => {
   if (x !== undefined && y !== undefined) {
     mainWindow.setPosition(x, y);
   }
+});
+
+// Auto-fit the window vertically when the AI answer overflows the current
+// viewport. Grows downward only, capped at 95% of the display's work area.
+// Called (throttled) by the renderer during streaming and once on completion.
+ipcMain.on('auto-fit-window', (event, { extra }) => {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (!Number.isFinite(extra) || extra <= 0) return;
+  const [w, h] = mainWindow.getSize();
+  const [x, y] = mainWindow.getPosition();
+  const workArea = screen.getDisplayMatching({ x, y, width: w, height: h }).workArea;
+  const maxHeight = Math.floor(workArea.height * 0.95);
+  const target = Math.min(maxHeight, h + Math.ceil(extra) + 8);
+  console.log('[auto-fit-window]', { extra, currentH: h, target, maxHeight, winY: y });
+  if (target <= h) { console.log('[auto-fit-window] no growth needed'); return; }
+  // Keep the window on-screen: if growing downward would push it past the
+  // work area, pull the top up instead of moving the bottom down.
+  let newY = y;
+  if (y + target > workArea.y + workArea.height) {
+    newY = Math.max(workArea.y, workArea.y + workArea.height - target);
+  }
+  mainWindow.setBounds({ x, y: newY, width: w, height: target }, false);
+  console.log('[auto-fit-window] resized to', target, 'at y=', newY);
 });
 
 ipcMain.handle('get-window-bounds', () => {

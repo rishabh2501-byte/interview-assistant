@@ -2,17 +2,18 @@ const express = require('express');
 const crypto = require('crypto');
 const Razorpay = require('razorpay');
 const pool = require('../config/db');
+const config = require('../config');
 const authMiddleware = require('../middleware/auth');
 
 const router = express.Router();
 
 function getRazorpay() {
-  if (!process.env.RAZORPAY_KEY_ID || !process.env.RAZORPAY_KEY_SECRET) {
+  if (!config.razorpay.enabled) {
     throw new Error('Razorpay keys not configured. Set RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET in .env');
   }
   return new Razorpay({
-    key_id: process.env.RAZORPAY_KEY_ID,
-    key_secret: process.env.RAZORPAY_KEY_SECRET,
+    key_id: config.razorpay.keyId,
+    key_secret: config.razorpay.keySecret,
   });
 }
 
@@ -46,13 +47,21 @@ router.post('/create-order', authMiddleware, async (req, res) => {
     order_id: order.id,
     amount: order.amount,
     currency: order.currency,
-    key_id: process.env.RAZORPAY_KEY_ID,
+    key_id: config.razorpay.keyId,
     plan,
     user: req.user,
   });
 });
 
 // POST /api/payment/verify
+// On success:
+//   • SUBSCRIPTION plan → creates a new ACTIVE subscription row with
+//     sessions_granted = plan.sessions_included and end_date = now + duration.
+//   • TOPUP plan        → finds the user's most recent ACTIVE subscription
+//     and ADDs sessions to its grant; extends end_date to max(current_end,
+//     now + plan.duration_days). If no active sub, creates a standalone one
+//     so the user doesn't lose the purchase.
+// All writes happen in a single transaction so a partial state is impossible.
 router.post('/verify', authMiddleware, async (req, res) => {
   const { razorpay_order_id, razorpay_payment_id, razorpay_signature, plan_id } = req.body;
 
@@ -62,7 +71,7 @@ router.post('/verify', authMiddleware, async (req, res) => {
 
   const body = razorpay_order_id + '|' + razorpay_payment_id;
   const expectedSignature = crypto
-    .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
+    .createHmac('sha256', config.razorpay.keySecret)
     .update(body)
     .digest('hex');
 
@@ -74,31 +83,110 @@ router.post('/verify', authMiddleware, async (req, res) => {
     return res.status(400).json({ error: 'Payment signature verification failed' });
   }
 
-  await pool.query(
-    `UPDATE payments
-     SET razorpay_payment_id = $1, razorpay_signature = $2, status = 'SUCCESS'
-     WHERE razorpay_order_id = $3`,
-    [razorpay_payment_id, razorpay_signature, razorpay_order_id]
-  );
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
 
-  const planResult = await pool.query('SELECT * FROM plans WHERE id = $1', [plan_id]);
-  if (planResult.rows.length === 0) return res.status(404).json({ error: 'Plan not found' });
-  const plan = planResult.rows[0];
+    await client.query(
+      `UPDATE payments
+         SET razorpay_payment_id = $1, razorpay_signature = $2, status = 'SUCCESS'
+       WHERE razorpay_order_id = $3`,
+      [razorpay_payment_id, razorpay_signature, razorpay_order_id]
+    );
 
-  const startDate = new Date();
-  const endDate = new Date();
-  endDate.setDate(endDate.getDate() + plan.duration_days);
+    const planResult = await client.query('SELECT * FROM plans WHERE id = $1', [plan_id]);
+    if (planResult.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Plan not found' });
+    }
+    const plan = planResult.rows[0];
+    const isTopup = plan.plan_type === 'TOPUP';
 
-  await pool.query(
-    `INSERT INTO subscriptions (user_id, plan_id, start_date, end_date, status)
-     VALUES ($1, $2, $3, $4, 'ACTIVE')`,
-    [req.user.id, plan_id, startDate, endDate]
-  );
+    let subscriptionRow;
 
-  res.json({
-    message: 'Payment verified. Subscription activated.',
-    subscription: { plan: plan.name, start_date: startDate, end_date: endDate, status: 'ACTIVE' },
-  });
+    if (isTopup) {
+      // Find user's most recent ACTIVE subscription
+      const existing = await client.query(
+        `SELECT * FROM subscriptions
+          WHERE user_id = $1 AND status = 'ACTIVE' AND end_date > NOW()
+          ORDER BY end_date DESC LIMIT 1`,
+        [req.user.id]
+      );
+
+      if (existing.rows.length > 0) {
+        // Add sessions + extend validity (max of current end_date or now+duration)
+        const sub = existing.rows[0];
+        const candidateEnd = new Date();
+        candidateEnd.setDate(candidateEnd.getDate() + plan.duration_days);
+        const newEnd = candidateEnd > new Date(sub.end_date) ? candidateEnd : sub.end_date;
+
+        const updated = await client.query(
+          `UPDATE subscriptions
+              SET sessions_granted = sessions_granted + $1,
+                  end_date = $2
+            WHERE id = $3
+          RETURNING *`,
+          [plan.sessions_included, newEnd, sub.id]
+        );
+        subscriptionRow = updated.rows[0];
+      } else {
+        // No active sub: create one so the top-up purchase isn't lost.
+        const endDate = new Date();
+        endDate.setDate(endDate.getDate() + plan.duration_days);
+        const inserted = await client.query(
+          `INSERT INTO subscriptions
+             (user_id, plan_id, start_date, end_date, sessions_granted, sessions_used, status)
+           VALUES ($1, $2, NOW(), $3, $4, 0, 'ACTIVE')
+           RETURNING *`,
+          [req.user.id, plan_id, endDate, plan.sessions_included]
+        );
+        subscriptionRow = inserted.rows[0];
+      }
+    } else {
+      // SUBSCRIPTION: supersede any existing active subscription and start fresh.
+      // (Could also stack — but fresh-start is simpler and matches user intent.)
+      await client.query(
+        `UPDATE subscriptions
+            SET status = 'CANCELLED'
+          WHERE user_id = $1 AND status = 'ACTIVE'`,
+        [req.user.id]
+      );
+
+      const endDate = new Date();
+      endDate.setDate(endDate.getDate() + plan.duration_days);
+      const inserted = await client.query(
+        `INSERT INTO subscriptions
+           (user_id, plan_id, start_date, end_date, sessions_granted, sessions_used, status)
+         VALUES ($1, $2, NOW(), $3, $4, 0, 'ACTIVE')
+         RETURNING *`,
+        [req.user.id, plan_id, endDate, plan.sessions_included]
+      );
+      subscriptionRow = inserted.rows[0];
+    }
+
+    await client.query('COMMIT');
+
+    res.json({
+      message: isTopup
+        ? 'Top-up added. Sessions credited to your active subscription.'
+        : 'Payment verified. Subscription activated.',
+      subscription: {
+        id: subscriptionRow.id,
+        plan: plan.name,
+        plan_type: plan.plan_type,
+        start_date: subscriptionRow.start_date,
+        end_date: subscriptionRow.end_date,
+        sessions_granted: subscriptionRow.sessions_granted,
+        sessions_used: subscriptionRow.sessions_used,
+        status: subscriptionRow.status,
+      },
+    });
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
 });
 
 // GET /api/payment/history

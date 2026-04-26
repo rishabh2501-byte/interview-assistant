@@ -136,6 +136,15 @@ export default function Login() {
               </button>
             </div>
           </div>
+          <div className="flex justify-end -mt-2">
+            <Link
+              to={electronPort ? `/forgot-password?electron_port=${electronPort}` : '/forgot-password'}
+              className="text-xs text-blue-600 hover:underline"
+            >
+              Forgot password?
+            </Link>
+          </div>
+
           <button type="submit" disabled={loading} className="btn-primary w-full flex items-center justify-center gap-2 py-2.5">
             <LogIn className="w-4 h-4" />
             {loading ? 'Signing in...' : 'Sign In'}

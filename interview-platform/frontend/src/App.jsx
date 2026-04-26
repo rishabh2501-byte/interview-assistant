@@ -12,15 +12,28 @@ import ResumeUpload from './pages/ResumeUpload';
 import Instructions from './pages/Instructions';
 import Interview from './pages/Interview';
 import Report from './pages/Report';
+import Mobile from './pages/Mobile';
+import ForgotPassword from './pages/ForgotPassword';
+import ResetPassword from './pages/ResetPassword';
+import VerifyEmail from './pages/VerifyEmail';
+import Home from './pages/Home';
 
 export default function App() {
   return (
     <AuthProvider>
       <Navbar />
       <Routes>
-        <Route path="/" element={<Navigate to="/dashboard" replace />} />
+        {/* Public landing — Home itself redirects auth'd users to /dashboard */}
+        <Route path="/" element={<Home />} />
         <Route path="/login" element={<Login />} />
         <Route path="/signup" element={<Signup />} />
+        {/* Mobile receiver — public route, auth is via pairing token in URL */}
+        <Route path="/mobile" element={<Mobile />} />
+
+        {/* Public auth flows */}
+        <Route path="/forgot-password" element={<ForgotPassword />} />
+        <Route path="/reset-password"  element={<ResetPassword />} />
+        <Route path="/verify-email"    element={<VerifyEmail />} />
 
         <Route path="/dashboard" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
         <Route path="/plans" element={<ProtectedRoute><Plans /></ProtectedRoute>} />

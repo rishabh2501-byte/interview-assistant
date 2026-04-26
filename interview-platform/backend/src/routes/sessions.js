@@ -1,25 +1,75 @@
 const express = require('express');
 const { OpenAI } = require('openai');
 const pool = require('../config/db');
+const config = require('../config');
 const authMiddleware = require('../middleware/auth');
-const subscriptionMiddleware = require('../middleware/subscription');
+const { requireSubscription } = require('../middleware/subscription');
 
 const router = express.Router();
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+const openai = new OpenAI({ apiKey: config.openai.apiKey });
 
-// POST /api/sessions/start  [requires active subscription]
-router.post('/start', authMiddleware, subscriptionMiddleware, async (req, res) => {
+// POST /api/sessions/start  [requires active subscription + quota]
+// Atomically consumes 1 session from the user's active subscription.
+// Uses a transaction + conditional UPDATE so two concurrent starts can't
+// both sneak past the quota check.
+router.post('/start', authMiddleware, requireSubscription({ requireQuota: true }), async (req, res) => {
   const { title } = req.body;
-  const result = await pool.query(
-    `INSERT INTO sessions (user_id, title) VALUES ($1, $2) RETURNING *`,
-    [req.user.id, title || 'Interview Session']
-  );
-  res.status(201).json({ message: 'Session started', session: result.rows[0] });
+  const sub = req.subscription;
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    // Atomic decrement-guard: only succeeds if quota is still available
+    // (or plan is legacy unlimited where sessions_granted = 0).
+    const updateRes = await client.query(
+      `UPDATE subscriptions
+          SET sessions_used = sessions_used + 1
+        WHERE id = $1
+          AND status = 'ACTIVE'
+          AND end_date > NOW()
+          AND (sessions_granted = 0 OR sessions_used < sessions_granted)
+      RETURNING sessions_granted, sessions_used`,
+      [sub.id]
+    );
+
+    if (updateRes.rowCount === 0) {
+      await client.query('ROLLBACK');
+      return res.status(402).json({
+        error: 'QUOTA_EXHAUSTED',
+        message: 'Session quota exhausted. Buy a top-up to continue.',
+      });
+    }
+
+    const sessionRes = await client.query(
+      `INSERT INTO sessions (user_id, title) VALUES ($1, $2) RETURNING *`,
+      [req.user.id, title || 'Interview Session']
+    );
+
+    await client.query('COMMIT');
+
+    const { sessions_granted, sessions_used } = updateRes.rows[0];
+    res.status(201).json({
+      message: 'Session started',
+      session: sessionRes.rows[0],
+      quota: {
+        granted: sessions_granted,
+        used: sessions_used,
+        remaining: sessions_granted === 0 ? null : sessions_granted - sessions_used,
+      },
+    });
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
 });
 
 // POST /api/sessions/:id/ask  [requires active subscription]
-router.post('/:id/ask', authMiddleware, subscriptionMiddleware, async (req, res) => {
+// Does NOT consume additional quota — ask is free within an already-started session.
+router.post('/:id/ask', authMiddleware, requireSubscription(), async (req, res) => {
   const { question } = req.body;
   if (!question) return res.status(400).json({ error: 'question is required' });
 

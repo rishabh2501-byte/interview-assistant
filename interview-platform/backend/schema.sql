@@ -10,27 +10,40 @@ CREATE TABLE IF NOT EXISTS users (
     username VARCHAR(50) UNIQUE NOT NULL,
     email VARCHAR(255) UNIQUE NOT NULL,
     password_hash VARCHAR(255) NOT NULL,
+    email_verified BOOLEAN NOT NULL DEFAULT FALSE,
     created_at TIMESTAMP DEFAULT NOW(),
     updated_at TIMESTAMP DEFAULT NOW()
 );
 
 -- Plans
+-- plan_type:
+--   SUBSCRIPTION → recurring access + quota, valid for duration_days
+--   TOPUP        → one-time session pack, added to user's active subscription
 CREATE TABLE IF NOT EXISTS plans (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     name VARCHAR(100) NOT NULL,
-    price INTEGER NOT NULL,          -- amount in paise (INR * 100)
-    duration_days INTEGER NOT NULL,
+    price INTEGER NOT NULL,              -- amount in paise (INR * 100)
+    duration_days INTEGER NOT NULL,      -- for TOPUP this is the add-on validity (e.g. 180)
+    sessions_included INTEGER NOT NULL DEFAULT 0, -- 0 = unlimited (legacy)
+    plan_type VARCHAR(20) NOT NULL DEFAULT 'SUBSCRIPTION'
+        CHECK (plan_type IN ('SUBSCRIPTION','TOPUP')),
+    is_active BOOLEAN NOT NULL DEFAULT TRUE,
     description TEXT,
     created_at TIMESTAMP DEFAULT NOW()
 );
 
 -- Subscriptions
+-- sessions_used counts consumed sessions in the current window.
+-- sessions_granted = plan.sessions_included + any top-ups applied.
+-- Quota-exhausted check: sessions_used >= sessions_granted  →  block.
 CREATE TABLE IF NOT EXISTS subscriptions (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     plan_id UUID NOT NULL REFERENCES plans(id),
     start_date TIMESTAMP NOT NULL DEFAULT NOW(),
     end_date TIMESTAMP NOT NULL,
+    sessions_granted INTEGER NOT NULL DEFAULT 0,
+    sessions_used    INTEGER NOT NULL DEFAULT 0,
     status VARCHAR(20) NOT NULL DEFAULT 'ACTIVE' CHECK (status IN ('ACTIVE','EXPIRED','CANCELLED')),
     created_at TIMESTAMP DEFAULT NOW()
 );

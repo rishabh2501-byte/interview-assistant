@@ -1,30 +1,62 @@
 # Interview Assistant
 
-A screen-share-invisible AI interview assistant. Listens to your meeting audio, transcribes it in real-time, and gives instant AI-powered answers — completely hidden from Zoom, Google Meet, and Teams screen sharing.
+A screen-share-invisible AI interview assistant with a full SaaS stack: desktop app that listens to your meeting and streams senior-level answers — hidden from Zoom, Meet, and Teams — plus a web portal for signup, pricing, and a mobile "stealth receiver" so answers can appear on your phone instead of the interview screen.
+
+**This repo contains 3 coordinated pieces:**
+
+1. **Electron desktop app** (`@/Users/rishabh.rai/IdeaProjects/interview-assistants/src/`) — the floating AI assistant
+2. **Backend API** (`@/Users/rishabh.rai/IdeaProjects/interview-assistants/interview-platform/backend/`) — Express + Postgres + WebSocket relay
+3. **Web frontend** (`@/Users/rishabh.rai/IdeaProjects/interview-assistants/interview-platform/frontend/`) — React landing page, auth flows, dashboard, payments, mobile receiver
+
+---
+
+## 🚀 Quick start
+
+**Full step-by-step setup is in [`SETUP.md`](./SETUP.md).** The short version:
+
+```bash
+# 1. Prereqs: Node 18+, PostgreSQL 14+
+
+# 2. Install everything
+npm install
+( cd interview-platform/backend && npm install )
+( cd interview-platform/frontend && npm install )
+
+# 3. Database
+createdb interview_platform
+cd interview-platform/backend
+psql -d interview_platform -f schema.sql
+psql -d interview_platform -f migrations/001_session_quotas.sql
+psql -d interview_platform -f migrations/002_email_verification.sql
+psql -d interview_platform -f seed.sql
+
+# 4. Backend env (REQUIRED — set DB creds, JWT_SECRET, OPENAI_API_KEY)
+cp .env.example .env
+# ...edit .env...
+
+# 5. Run — 3 terminals
+npm start                              # backend (terminal 1)
+( cd ../frontend && npm run dev )      # frontend (terminal 2)
+( cd ../.. && npm start )              # electron (terminal 3)
+```
+
+Open `http://localhost:5173` → sign in with `testuser@example.com` / `Test@123` → Pro plan with 10 sessions is ready.
+
+Full details, troubleshooting, phone pairing, and Razorpay / SMTP setup all in **[`SETUP.md`](./SETUP.md)**.
 
 ---
 
 ## Requirements
 
-- **macOS** (Windows partially supported but invisibility is macOS-only)
+- **macOS** (Windows partially supported but screen-share invisibility is macOS-only)
 - **Node.js 18+** → [nodejs.org](https://nodejs.org)
-- **API Key** — at least one of:
-  - **Groq** (FREE) → [console.groq.com](https://console.groq.com) — recommended, no credit card needed
-  - **OpenAI** (Paid) → [platform.openai.com](https://platform.openai.com) — better screenshot analysis
+- **PostgreSQL 14+** for the backend
+- **OpenAI API key** → [platform.openai.com](https://platform.openai.com) — required for AI features
 
----
-
-## Setup (after cloning)
-
-```bash
-# 1. Install dependencies
-npm install
-
-# 2. Start the app
-npm start
-```
-
-That's it. The app opens as a floating transparent panel on the right side of your screen.
+Optional:
+- **Razorpay test keys** for payment flow → [dashboard.razorpay.com](https://dashboard.razorpay.com)
+- **SMTP creds** (Gmail App Password / SendGrid / etc.) for real verification + reset emails
+- **Groq key** / **Ollama** as free alternatives for some AI calls (see existing integration)
 
 ---
 
@@ -122,13 +154,51 @@ Then enable Ollama in Settings. The app auto-detects it on startup.
 
 ---
 
+## Dual-device mode (stealth)
+
+Pair your phone to the desktop app with a QR code — AI answers stream to your phone instead of the desktop screen. Completely off-camera.
+
+- Click the **⇆** button in the desktop app's header → QR modal appears
+- Scan with your phone (same WiFi required)
+- Phone opens a mobile page showing live-streamed answers + tappable **Answer** / **Screenshot** buttons that trigger the desktop remotely
+- Desktop output-mode toggle: **D** (desktop only) / **D+M** (both) / **M** (mobile only — desktop stays blank)
+
+See the [Phone pairing section in SETUP.md](./SETUP.md#8-phone-pairing-dual-device-mode) for LAN configuration.
+
+---
+
+## Web portal
+
+A companion web app handles signup, authentication, pricing, and the mobile receiver. Run it alongside the desktop app from `@/Users/rishabh.rai/IdeaProjects/interview-assistants/interview-platform/`.
+
+- **`/`** — landing page with features + pricing (auto-redirects to dashboard if signed in)
+- **`/login`** + **`/signup`** + **`/forgot-password`** + **`/reset-password`** + **`/verify-email`** — full auth flow
+- **`/dashboard`** — subscription status, session quota progress, recent interviews, billing history
+- **`/plans`** — monthly subscriptions (Starter / Pro / Ultra) and top-up packs
+- **`/payment/:planId`** — Razorpay checkout, UPI-first
+- **`/mobile?token=...`** — phone receiver for dual-device mode
+
+---
+
 ## Tech Stack
 
-- **Electron** — desktop app framework
-- **Groq API** — free Whisper transcription + Llama chat/vision
-- **OpenAI API** — GPT-4o for premium screenshot analysis
-- **Ollama** — local offline models (optional)
+**Desktop**
+- **Electron** — floating, screen-share-invisible window
 - **Web Audio API** — real-time microphone capture
+
+**Backend** (`interview-platform/backend`)
+- **Express** + **PostgreSQL** — REST API, user accounts, sessions, payments
+- **ws** — WebSocket relay for dual-device sync
+- **nodemailer** — transactional emails (verify, reset)
+- **Razorpay** — UPI + cards + netbanking payments
+
+**Frontend** (`interview-platform/frontend`)
+- **React 18** + **React Router** + **Vite** + **Tailwind CSS** + **lucide-react** icons
+
+**AI**
+- **OpenAI** — GPT-4o + GPT-4o-mini (chat + vision)
+- **Groq API** — free Whisper transcription + Llama fallback
+- **Ollama** — local offline models (optional)
 
 ---
 

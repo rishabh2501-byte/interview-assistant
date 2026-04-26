@@ -1,4 +1,5 @@
 const { ipcRenderer } = require('electron');
+const appConfig = require('./config');
 
 // State
 let isCapturing = false;
@@ -30,8 +31,8 @@ let responseHistoryIndex = -1;
 
 // API Keys
 // NOTE: All AI features (answer, screenshot, transcription) now use OpenAI exclusively.
-// Groq / Ollama paths are kept in code but disabled — OpenAI key is baked in below.
-const BUILTIN_OPENAI_KEY = 'process.env.OPENAI_API_KEY || localStorage.getItem('openai_api_key') || ''';
+// Groq / Ollama paths are kept in code but disabled — OpenAI key loaded from env.
+const BUILTIN_OPENAI_KEY = process.env.OPENAI_API_KEY || localStorage.getItem('openai_api_key') || '';
 let groqApiKey = ''; // disabled — using OpenAI only
 let apiKey = BUILTIN_OPENAI_KEY;
 let ollamaEnabled = false; // disabled — using OpenAI only
@@ -104,7 +105,7 @@ async function doLogin() {
   if (loginError) loginError.textContent = '';
   if (loginSubmitBtn) { loginSubmitBtn.disabled = true; loginSubmitBtn.textContent = 'Signing in…'; }
   try {
-    const res = await fetch('http://localhost:5000/api/auth/login', {
+    const res = await fetch(`${appConfig.backendUrl}/api/auth/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email, password }),
@@ -364,6 +365,38 @@ document.querySelectorAll('.section-header.collapsible').forEach(header => {
   });
 });
 
+// ─── Auto-fit window to answer length ───────────────────────────────────
+// If the AI answer overflows the current window height, ask the main
+// process to grow the window downward so the user doesn't have to scroll
+// inside a tiny viewport. Throttled so we don't spam resize during streaming.
+let _autoFitTimer = null;
+let _autoFitLast = 0;
+function autoFitWindowToContent() {
+  const now = Date.now();
+  const since = now - _autoFitLast;
+  const THROTTLE_MS = 350;
+  const schedule = (delay) => {
+    if (_autoFitTimer) clearTimeout(_autoFitTimer);
+    _autoFitTimer = setTimeout(() => {
+      _autoFitTimer = null;
+      _autoFitLast = Date.now();
+      try {
+        const mainScroll = document.getElementById('main-scroll');
+        const box = document.getElementById('response-box');
+        if (!mainScroll || !box) return;
+        // Two overflow signals: the main scroll container, and the answer
+        // box itself (which has its own max-height).
+        const scrollOverflow = mainScroll.scrollHeight - mainScroll.clientHeight;
+        const boxOverflow    = box.scrollHeight - box.clientHeight;
+        const extra = Math.max(scrollOverflow, boxOverflow);
+        console.log('[autoFit]', { scrollOverflow, boxOverflow, extra, winH: window.innerHeight });
+        if (extra > 8) ipcRenderer.send('auto-fit-window', { extra });
+      } catch (e) { console.warn('autoFit failed:', e); }
+    }, delay);
+  };
+  schedule(since >= THROTTLE_MS ? 0 : THROTTLE_MS - since);
+}
+
 // Auto-scroll main area to response box when new content is set
 function scrollToResponse() {
   const mainScroll = document.getElementById('main-scroll');
@@ -548,8 +581,19 @@ document.getElementById('response-forward-btn').addEventListener('click', () => 
 });
 
 // Scroll AI response via keyboard shortcut (Cmd+Shift+Up/Down)
+// Try the answer box first; if it isn't the overflowing element, fall back
+// to the outer .main-scroll so the shortcut always moves *something*.
 ipcRenderer.on('scroll-response', (event, direction) => {
-  responseBox.scrollTop += direction === 'up' ? -140 : 140;
+  const delta = direction === 'up' ? -140 : 140;
+  const boxCanScroll = responseBox.scrollHeight > responseBox.clientHeight + 1;
+  if (boxCanScroll) {
+    responseBox.scrollTop += delta;
+    return;
+  }
+  const mainScroll = document.getElementById('main-scroll');
+  if (mainScroll && mainScroll.scrollHeight > mainScroll.clientHeight + 1) {
+    mainScroll.scrollTop += delta;
+  }
 });
 
 // Add a response to display history and update nav buttons
@@ -643,7 +687,8 @@ async function startCapture() {
     
     isCapturing = true;
     captureBtn.classList.add('active');
-    captureBtn.textContent = '🔴 Listening';
+    const capLabel = captureBtn.querySelector('.btn-label');
+    if (capLabel) capLabel.textContent = 'Stop'; else captureBtn.textContent = 'Stop';
     listeningIndicator.classList.add('active');
     showStatus('Listening...', 'recording');
     
@@ -891,7 +936,8 @@ function stopCapture() {
   }
   
   captureBtn.classList.remove('active');
-  captureBtn.textContent = '🎤 Listen';
+  const capLabelOff = captureBtn.querySelector('.btn-label');
+  if (capLabelOff) capLabelOff.textContent = 'Listen'; else captureBtn.textContent = 'Listen';
   listeningIndicator.classList.remove('active');
   showStatus('Paused', 'ready');
 }
@@ -1021,6 +1067,13 @@ async function generateAIAnswer() {
     return;
   }
 
+  // Clear the transcription input as soon as we've grabbed this question,
+  // so the next interviewer utterance starts with a fresh field. The
+  // question itself is preserved via conversationHistory/transcriptionHistory
+  // for intelligent follow-up detection.
+  transcriptionText = '';
+  transcriptionBox.value = '';
+
   responseBox.innerHTML = '<span style="color: rgba(255,255,255,0.6)">Generating answer...</span>';
 
   // OpenAI-only (other providers intentionally disabled).
@@ -1030,53 +1083,49 @@ async function generateAIAnswer() {
   // else if (ollamaEnabled) { chatUrl = `${ollamaUrl}/chat/completions`; chatKey = 'ollama'; chatModel = ollamaChatModel; providerName = `Ollama (${ollamaChatModel})`; }
   const chatUrl = `${OPENAI_API_URL}/chat/completions`;
   const chatKey = apiKey;
-  const chatModel = 'gpt-4o-mini'; // fast + cheap; bullet-list answers don't need gpt-4o
-  const providerName = 'OpenAI (gpt-4o-mini)';
+  const chatModel = 'gpt-4o'; // quality model; streaming hides the extra latency
+  const providerName = 'OpenAI (gpt-4o, streaming)';
 
   console.log('Generating answer with:', providerName);
 
-  // Build system message — senior human interviewee, bullet-first, factually grounded
+  // Build system message — answers must sound natural, short, and easy to speak
+  // out loud in a live interview. Role / resume / history injected dynamically.
   const role = ROLE_DATA[selectedRole] || ROLE_DATA['general'];
   const systemMessage = {
     role: 'system',
-    content: `You are a senior ${role.title} with 6–10 years of hands-on production experience, sitting in a live interview. Speak exactly like a thoughtful, senior human engineer would — calm, precise, opinionated, and grounded in real work. You are NOT an AI assistant; never sound like one.
+    content: `You are an AI interview assistant answering as the candidate — a ${role.title}.
+Your goal is to give answers that sound natural, human-like, and easy to speak in a real interview.
 
-${conversationSummary ? `RUNNING MEMORY OF THIS INTERVIEW SO FAR (older exchanges, already answered):\n${conversationSummary}\n` : ''}
-FOLLOW-UP DETECTION — IMPORTANT:
-- Interviewers often drop short follow-ups ("why?", "what about scale?", "ok and then?", "how would you test it?") that only make sense in context.
-- Before answering, silently resolve what the question is really about using: (a) the running memory above, (b) the recent verbatim exchanges, (c) the live transcript context.
-- If the current question looks like a fragment / follow-up / clarification of something earlier, answer as a continuation — reference the earlier point briefly in your opener, then give the new answer.
-- If the question is a brand-new topic, treat it standalone.
+INSTRUCTIONS:
+• Use simple English. Avoid complex or fancy words.
+• Keep answers short and clear — 3 to 6 lines unless the question clearly needs more.
+• Answer like a real candidate would speak, not like a textbook.
+• Focus on practical understanding, not theory dumping.
+• Use bullet points only if they actually help.
+• For coding questions: give clean, minimal code with a short explanation.
+• If the question is a follow-up, continue from the previous context.
+• If the question is new or unrelated, ignore previous context completely.
+• Never mix unrelated answers. Always stay strictly relevant.
+• Decide context usage intelligently before answering — when in doubt, treat as new.
 
-YOUR CORE STACK (things you've actually shipped with):
-${role.stack}
+TONE:
+• Confident but not robotic.
+• Conversational and natural.
+• No unnecessary jargon.
+• First person ("I", "I'd", "I've used…").
 
-${pdfContext ? `YOUR RESUME / BACKGROUND — ground every answer in this, reference projects, companies, numbers, scale when relevant:\n${pdfContext}\n` : ''}${userContext ? `ADDITIONAL CONTEXT ABOUT YOU:\n${userContext}\n` : ''}
-ANSWER FORMAT — FOLLOW EXACTLY:
-- Start with ONE short first-person opening line that directly frames the answer (no filler, no "Great question", no "Certainly").
-- Then give the answer as a clean **bullet list** (use "- " markdown bullets). 3–6 bullets is the sweet spot; go up to 8 only for system-design / deep-dives.
-- Each bullet: bold the key term with **markdown**, then 1–2 tight sentences after it. Concrete > abstract.
-- Include at least one bullet with a concrete real-world example, number, trade-off, or production lesson ("at my last company we hit X at Y RPS and moved to Z because...").
-- End with ONE closing line that states your actual preference / recommendation / trade-off decision.
+OUTPUT STYLE:
+• Start with a direct one-line answer.
+• Then 2–4 key points (bullets or short sentences).
+• End with a short concluding line (optional).
 
-TONE — SENIOR HUMAN, NOT ROBOT:
-- First person always: "I've used...", "In my experience...", "What I usually do is...", "I'd lean toward..."
-- Opinionated and decisive — seniors have clear preferences and say why.
-- Natural, spoken cadence — contractions ("I've", "it's", "don't"), occasional "honestly", "to be fair", "the tricky part is".
-- No AI tells: never say "As an AI", "I hope this helps", "Certainly!", "Great question!", "In conclusion", "I'd be happy to".
-- No over-hedging, no marketing fluff, no lists of synonyms.
+AVOID:
+• Long paragraphs, repetition, over-explanation, generic textbook definitions.
+• AI-isms like "Certainly", "Great question", "As an AI", "I hope this helps".
 
-FACTUAL ACCURACY — NON-NEGOTIABLE:
-- Only state things that are technically correct as of your training. If unsure about a specific number/version, say "around" or give a range rather than invent.
-- Prefer canonical, well-known patterns over obscure ones. Name real tools, real libraries, real RFCs/specs when relevant.
-- For complexity / Big-O, state it precisely. For system design, give concrete numbers (QPS, latency, storage) with realistic orders of magnitude.
-- If a question has a genuine trade-off, show both sides in one bullet, then pick a side.
-
-SPECIAL CASES:
-- Behavioural questions: use STAR compressed into bullets — **Situation / Task**, **Action**, **Result** (each a bullet), with a real-sounding specific story.
-- Coding questions: give the working solution in a fenced code block (language inferred, default Java), then bullets for **Approach**, **Complexity**, **Edge cases**, **Follow-ups I'd ask**.
-- System design: bullets for **Requirements clarified**, **High-level components**, **Data model**, **Scale & bottlenecks**, **Trade-offs I'd pick**.
-- Follow-up / pushback: acknowledge the point in the first line, then bullets defending or refining your position.`
+${conversationSummary ? `PREVIOUS CONTEXT (what's been discussed so far):\n${conversationSummary}\n\n` : ''}MY STACK: ${role.stack}
+${pdfContext ? `\nMY RESUME / BACKGROUND — use only if relevant:\n${pdfContext}\n` : ''}${userContext ? `\nADDITIONAL CONTEXT ABOUT ME:\n${userContext}\n` : ''}
+GOAL: Help me give strong, clear, interview-ready answers quickly.`
   };
 
   // Save this transcription to rolling history (keep last 5)
@@ -1112,11 +1161,13 @@ SPECIAL CASES:
       body: JSON.stringify({
         model: chatModel,
         messages: messages,
-        max_tokens: 600,
-        temperature: 0.5,
-        presence_penalty: 0.3,
+        // No max_tokens cap — let the answer complete naturally.
+        // OpenAI's hard ceiling for gpt-4o is 4096 output tokens; we don't clip below that.
+        max_tokens: 4096,
+        temperature: 0.55,
+        presence_penalty: 0.35,
         frequency_penalty: 0.3,
-        stream: false
+        stream: true
       })
     });
 
@@ -1128,9 +1179,54 @@ SPECIAL CASES:
       throw new Error('API request failed');
     }
 
-    const data = await response.json();
-    const answer = data.choices[0].message.content;
-    
+    // Stream tokens to the UI so the answer starts appearing within ~500ms
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let answer = '';
+    let buffer = '';
+    let firstTokenSeen = false;
+    responseBox.innerHTML = '';
+    scrollToResponse();
+
+    // Dual-device: announce start + (if stealth) hide desktop output.
+    ddSendAnswerStart({ kind: 'text' });
+    ddMaybeHideAnswerOnDesktop();
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop();
+      for (const line of lines) {
+        if (!line.startsWith('data: ') || line === 'data: [DONE]') continue;
+        try {
+          const token = JSON.parse(line.slice(6)).choices?.[0]?.delta?.content || '';
+          if (token) {
+            if (!firstTokenSeen) {
+              firstTokenSeen = true;
+              showStatus('Answering…', 'ready');
+            }
+            answer += token;
+            // Mirror to mobile (if enabled)
+            ddSendAnswerToken(token, answer);
+            // Desktop render — suppressed in stealth mode
+            if (ddShouldRenderDesktop()) {
+              const mainScroll = document.getElementById('main-scroll');
+              const stickToBottom = mainScroll
+                ? (mainScroll.scrollHeight - mainScroll.scrollTop - mainScroll.clientHeight) < 40
+                : true;
+              responseBox.innerHTML = highlightImportantParts(answer);
+              if (stickToBottom && mainScroll) mainScroll.scrollTop = mainScroll.scrollHeight;
+              autoFitWindowToContent();
+            }
+          }
+        } catch (_) {}
+      }
+    }
+
+    ddSendAnswerDone(answer);
+
     // Store this exchange in conversation history
     conversationHistory.push(currentQuestion);
     conversationHistory.push({ role: 'assistant', content: answer });
@@ -1138,12 +1234,12 @@ SPECIAL CASES:
     // Fold older exchanges into the running summary so follow-up questions
     // keep full interview context without ballooning the prompt.
     maybeSummariseHistory();
-    
-    responseBox.innerHTML = highlightImportantParts(answer);
+
     addToResponseHistory(responseBox.innerHTML);
-    scrollToResponse();
-    showStatus('✓ Answer ready!', 'success');
+    showStatus('✓ Answer ready', 'success');
     console.log('Conversation history length:', conversationHistory.length);
+    // Final fit in case throttling skipped the last growth
+    setTimeout(autoFitWindowToContent, 80);
 
   } catch (error) {
     console.error('AI Answer error:', error);
@@ -1211,9 +1307,9 @@ async function captureAndAnalyzeScreenshot() {
     await new Promise(resolve => { video.onloadedmetadata = resolve; });
     await video.play();
 
-    // Window capture → full resolution (it's already one window).
-    // Full screen → cap at 1920px wide so the payload stays manageable.
-    const MAX_WIDTH = isWindowCapture ? Infinity : 1920;
+    // Cap image width to keep vision latency low without losing OCR quality.
+    // Window capture: 1600 (usually one editor window). Full screen: 1600 too.
+    const MAX_WIDTH = isWindowCapture ? 1600 : 1600;
     const scale = Math.min(1, MAX_WIDTH / video.videoWidth);
     const canvas = document.createElement('canvas');
     canvas.width  = Math.round(video.videoWidth  * scale);
@@ -1230,75 +1326,64 @@ async function captureAndAnalyzeScreenshot() {
     // else { visionUrl = `${ollamaUrl}/chat/completions`; visionKey = 'ollama'; visionModel = ollamaVisionModel; }
     const visionUrl = `${OPENAI_API_URL}/chat/completions`;
     const visionKey = apiKey;
-    const visionModel = 'gpt-4o-mini'; // fast vision model — enough for interview screenshots
-    const providerName = 'OpenAI (gpt-4o-mini)';
+    const visionModel = 'gpt-4o'; // quality model for OCR + reasoning; streaming hides latency
+    const providerName = 'OpenAI (gpt-4o, streaming)';
 
     responseBox.innerHTML = `<span style="color: rgba(255,255,255,0.6)">Analyzing with ${providerName}...</span>`;
 
     const role = ROLE_DATA[selectedRole] || ROLE_DATA['general'];
     const recentTranscription = transcriptionBox.value.trim();
 
-    // System prompt — senior human persona + full interview-assistant context
-    const systemContent = [
-      `You are my personal AI interview assistant. I am a senior ${role.title} with 6–10 years of hands-on production experience in a live interview right now. You speak and answer AS ME — first person, thoughtful senior engineer, calm, precise, opinionated, grounded in real work. Never sound like an AI.`,
-      `Core stack I've actually shipped with: ${role.stack}`,
-      pdfContext ? `MY RESUME / BACKGROUND — ground every answer in this, reference my actual projects, companies, numbers, scale, outcomes whenever relevant:\n${pdfContext.slice(0, 2000)}` : '',
-      userContext ? `ADDITIONAL CONTEXT I GAVE YOU ABOUT ME / THE ROLE / THE COMPANY:\n${userContext}` : '',
-      conversationSummary ? `RUNNING MEMORY OF THIS INTERVIEW SO FAR (already discussed):\n${conversationSummary}` : '',
-      '',
-      'WHAT THE SCREENSHOT COULD BE — handle ALL cases:',
-      '- Coding problem (LeetCode-style, take-home, online editor) → give full working solution.',
-      '- Existing code / snippet for review / debugging → find bugs, suggest refactors, provide fixed version.',
-      '- System design prompt or whiteboard diagram → give structured design answer.',
-      '- Architecture / sequence / ER diagram → explain it, critique it, or extend it as asked.',
-      '- SQL query / schema → write or optimise the query, explain trade-offs, indexes.',
-      '- Error message / stack trace / log → diagnose the root cause and fix.',
-      '- API spec / OpenAPI / docs / config file → explain, critique, or modify as requested.',
-      '- Behavioural / conceptual question written on a slide → answer it like the candidate.',
-      '- Data / spreadsheet / chart / dashboard → interpret the data and answer the question.',
-      '- Job description / requirements → tailor an answer showing fit from MY RESUME.',
-      '- Any other content → figure out what the interviewer is really asking and answer that.',
-      '',
-      'ANSWER FORMAT:',
-      '- ONE short first-person opening line framing the answer (no filler, no "Certainly", no "Great question").',
-      '- Then a markdown bullet list ("- " bullets). 3–6 bullets usually; up to 8 for system-design / deep-dives.',
-      '- Each bullet: **bold the key term** in markdown, then 1–2 tight sentences.',
-      '- Include at least one bullet with a concrete example from MY background / a real-world number / a production trade-off.',
-      '- End with one closing line stating my preferred approach / decision.',
-      '',
-      'TONE: first person, contractions ("I\'ve", "it\'s", "don\'t"), opinionated, spoken cadence. Occasional "honestly", "to be fair", "the tricky part is". Never "As an AI", "I hope this helps", "In conclusion", "I\'d be happy to".',
-      'ACCURACY: only state things that are technically correct. Precise Big-O. Realistic QPS / latency / storage numbers. Real library / tool / RFC names. If unsure of a specific version or figure, say "around" or give a range.',
-      '',
-      'SPECIAL-CASE FORMATS:',
-      '- Coding problem: fenced code block with full working solution (default Java unless another language is clearly shown), then bullets for **Approach**, **Complexity** (time & space), **Edge cases**, **Follow-ups I\'d ask**.',
-      '- Code review / bug fix: bullets listing issues (bolded), then fenced code block with the fixed version, then a final bullet on what changed and why.',
-      '- System design: bullets for **Requirements clarified**, **High-level components**, **Data model**, **Scale & bottlenecks**, **Trade-offs I\'d pick**.',
-      '- SQL: fenced code block with the query, then bullets for **Indexes / plan**, **Edge cases**, **Alternative**.',
-      '- Error / stack trace: bullets for **Root cause**, **Fix**, **Prevention**, optional code block.',
-      '- Behavioural: STAR as bullets — **Situation / Task**, **Action**, **Result**, grounded in MY resume.'
-    ].filter(Boolean).join('\n');
+    // Clear the transcription field — the current text is already in
+    // `recentTranscription` and will go to the AI alongside the image.
+    // This keeps the next interviewer utterance starting from an empty box.
+    transcriptionText = '';
+    transcriptionBox.value = '';
 
-    // User instruction — extract intent first, then answer using screenshot + spoken context
+    // System prompt — same simple / natural style as text answers, adapted for vision.
+    const systemContent = `You are an AI interview assistant answering as the candidate — a ${role.title}.
+Your goal is to give answers that sound natural, human-like, and easy to speak in a real interview.
+You are being given BOTH a screenshot from the candidate's screen AND the recent spoken transcription from the interviewer. Use both together, the way a human would — the question may be on the screen, in the spoken text, or split between them.
+
+INSTRUCTIONS:
+• Use simple English. Avoid complex or fancy words.
+• Keep answers short and clear — 3 to 6 lines unless the question clearly needs more (coding/design questions can go longer).
+• Answer like a real candidate would speak, not like a textbook.
+• Focus on practical understanding, not theory dumping.
+• For coding questions: give clean, minimal code with a short explanation.
+• If the question is a follow-up of our previous discussion, continue from that context.
+• If it's a new or unrelated question, ignore previous context completely.
+• Never mix unrelated answers. Stay strictly relevant.
+• Don't describe what the screenshot looks like — go straight to the answer.
+• If an example / test case / constraint is visible on screen, your solution MUST handle it.
+
+TONE:
+• Confident but not robotic. Conversational and natural.
+• No unnecessary jargon. First person ("I", "I'd", "I've used…").
+• No AI-isms like "Certainly", "Great question", "As an AI", "I hope this helps".
+
+OUTPUT STYLE:
+• Start with a direct one-line answer / stance.
+• Then 2–4 key points (bullets or short sentences). For coding: include a fenced code block.
+• End with a short concluding line (optional).
+
+${conversationSummary ? `PREVIOUS CONTEXT (what's been discussed so far):\n${conversationSummary}\n\n` : ''}MY STACK: ${role.stack}
+${pdfContext ? `\nMY RESUME / BACKGROUND — use only if relevant:\n${pdfContext.slice(0, 2500)}\n` : ''}${userContext ? `\nADDITIONAL CONTEXT ABOUT ME:\n${userContext}\n` : ''}
+GOAL: Help me give a strong, clear, interview-ready answer using the screen + what the interviewer just said.`;
+
+    // User instruction — screenshot + transcription go together as one multimodal message
     const taskText = [
-      'This screenshot is from my live interview RIGHT NOW. Read everything visible on screen carefully — problem text, constraints, examples, code, diagrams, error messages, SQL, data, slides, or any other content.',
-      recentTranscription ? `What the interviewer just said / what I\'ve been discussing (use as context, may contain the actual question if the screen is just supporting material):\n"""\n${recentTranscription.slice(-1200)}\n"""` : '',
+      'This screenshot is from my live interview RIGHT NOW. Read everything visible — problem text, constraints, examples, code, diagrams, errors, SQL, data, slides, etc.',
+      recentTranscription
+        ? `What the interviewer just said / what I was discussing (use as the actual question if the screen is just supporting material):\n"""\n${recentTranscription.slice(-1500)}\n"""`
+        : '(No recent spoken context — the question is fully on the screen.)',
       '',
-      'Do this internally, then answer:',
-      '1. Figure out WHAT TYPE of screen this is (coding problem / code review / design / SQL / error / docs / slide / diagram / data / other).',
-      '2. Figure out the EXACT question or task — combine what\'s on screen with the spoken context and running memory. The interviewer may not state the full question on screen; infer it.',
-      '3. Answer it AS ME following the ANSWER FORMAT and the right SPECIAL-CASE format from the system prompt.',
-      '',
-      'Strict rules:',
-      '- Do NOT describe the UI, the IDE, the window, or what the screenshot looks like. Go straight to the substantive answer.',
-      '- Do NOT restate the full problem back — reference it only briefly if needed.',
-      '- If an example / test case / constraint is visible, make sure the solution handles it exactly.',
-      '- If something on screen is genuinely ambiguous, state your ONE assumption in a bullet and proceed confidently.',
-      '- Ground the answer in MY RESUME and MY PRIOR ANSWERS (running memory) whenever relevant so it feels consistent with what I\'ve already said.'
+      'Combine the screen and the spoken context to figure out the exact question, then answer it in the natural style above.'
     ].filter(Boolean).join('\n');
 
     const userContent = [
       { type: 'text', text: taskText },
-      { type: 'image_url', image_url: { url: `data:image/jpeg;base64,${base64Image}` } }
+      { type: 'image_url', image_url: { url: `data:image/jpeg;base64,${base64Image}`, detail: 'high' } }
     ];
 
     const response = await fetch(visionUrl, {
@@ -1310,9 +1395,9 @@ async function captureAndAnalyzeScreenshot() {
           { role: 'system', content: systemContent },
           { role: 'user',   content: userContent }
         ],
-        max_tokens: 750,
-        temperature: 0.4,
-        presence_penalty: 0.3,
+        max_tokens: 4096,
+        temperature: 0.5,
+        presence_penalty: 0.35,
         frequency_penalty: 0.3,
         stream: true
       })
@@ -1335,6 +1420,10 @@ async function captureAndAnalyzeScreenshot() {
     let buffer = '';
     responseBox.innerHTML = '';
 
+    // Dual-device: announce start + (if stealth) hide desktop output.
+    ddSendAnswerStart({ kind: 'screenshot' });
+    ddMaybeHideAnswerOnDesktop();
+
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
@@ -1347,16 +1436,27 @@ async function captureAndAnalyzeScreenshot() {
           const token = JSON.parse(line.slice(6)).choices?.[0]?.delta?.content || '';
           if (token) {
             fullText += token;
-            responseBox.innerHTML = highlightImportantParts(fullText);
-            responseBox.scrollTop = responseBox.scrollHeight;
+            ddSendAnswerToken(token, fullText);
+            if (ddShouldRenderDesktop()) {
+              const mainScroll = document.getElementById('main-scroll');
+              const stickToBottom = mainScroll
+                ? (mainScroll.scrollHeight - mainScroll.scrollTop - mainScroll.clientHeight) < 40
+                : true;
+              responseBox.innerHTML = highlightImportantParts(fullText);
+              if (stickToBottom && mainScroll) mainScroll.scrollTop = mainScroll.scrollHeight;
+              autoFitWindowToContent();
+            }
           }
         } catch (_) {}
       }
     }
 
+    ddSendAnswerDone(fullText);
+
     addToResponseHistory(responseBox.innerHTML);
     scrollToResponse();
     showStatus('Screenshot analyzed!', 'success');
+    setTimeout(autoFitWindowToContent, 80);
 
     // Persist the screenshot exchange into conversation memory (text-only placeholder
     // for the question so it can be summarised later without carrying the image bytes).
@@ -1589,3 +1689,249 @@ document.addEventListener('mouseup', () => {
   resizeDirection = null;
   initialBounds = null;
 });
+
+// ═══════════════════════════════════════════════════════════════════════
+// DUAL-DEVICE MODE (Desktop ↔ Mobile relay)
+// ═══════════════════════════════════════════════════════════════════════
+// - Connects to backend WS (/ws) using the stored JWT on login.
+// - "Pair Mobile" button requests a one-shot pairing token from the
+//   backend, shows a QR code that links to <frontend>/mobile?token=XXX.
+// - Mobile connects with the token; backend relays messages between the
+//   two sockets in the same room.
+// - Output mode (desktop / both / mobile) controls WHERE answers render.
+//   'mobile' = stealth: desktop shows a placeholder, answer streams only
+//              to the phone.
+// - Mobile can send trigger:answer / trigger:screenshot to fire the same
+//   actions as the desktop keyboard shortcuts.
+// ═══════════════════════════════════════════════════════════════════════
+
+const DD_BACKEND      = appConfig.backendUrl;
+const DD_WS_URL       = appConfig.wsUrl;
+const DD_MODE_KEY     = 'dd_output_mode';
+
+let ddWs = null;
+let ddWsReconnectTimer = null;
+let ddWsBackoff = 1000;
+let ddPeerConnected = false;
+let ddOutputMode = localStorage.getItem(DD_MODE_KEY) || 'desktop'; // 'desktop' | 'both' | 'mobile'
+
+const ddPeerDot      = document.getElementById('peer-dot');
+const ddModeSwitch   = document.getElementById('mode-switch');
+const ddPairBtn      = document.getElementById('pair-mobile-btn');
+const ddPairModal    = document.getElementById('pair-modal');
+const ddPairCloseBtn = document.getElementById('pair-close-btn');
+const ddPairQr       = document.getElementById('pair-qr');
+const ddPairUrl      = document.getElementById('pair-url');
+const ddPairExpires  = document.getElementById('pair-expires');
+
+// ─── Public helpers used by the existing answer / screenshot streams ───
+function ddShouldRenderDesktop() { return ddOutputMode !== 'mobile'; }
+function ddShouldSendMobile()    { return ddOutputMode !== 'desktop' && ddPeerConnected; }
+
+function ddSend(type, payload) {
+  if (!ddWs || ddWs.readyState !== WebSocket.OPEN) return;
+  try { ddWs.send(JSON.stringify({ type, ...(payload || {}) })); } catch (_) {}
+}
+
+function ddSendAnswerStart(meta) {
+  if (ddShouldSendMobile()) ddSend('answer:start', { meta: meta || {} });
+}
+function ddSendAnswerToken(delta, fullText) {
+  if (ddShouldSendMobile()) ddSend('answer:token', { delta, fullText });
+}
+function ddSendAnswerDone(fullText) {
+  if (ddShouldSendMobile()) ddSend('answer:done', { fullText });
+}
+function ddSendStatus(text, kind) {
+  if (ddShouldSendMobile()) ddSend('status', { text, kind });
+}
+
+// Desktop rendering policy: in 'mobile' mode, show a discreet placeholder
+// instead of the real streaming text. The answer still goes into history
+// and conversation memory, so the user can review later by switching mode.
+function ddMaybeHideAnswerOnDesktop() {
+  if (ddOutputMode === 'mobile') {
+    const box = document.getElementById('response-box');
+    if (box) box.innerHTML = '<span style="color: rgba(255,255,255,0.5); font-style: italic;">📱 Streaming to your phone…</span>';
+  }
+}
+
+// ─── Mode switch UI ────────────────────────────────────────────────────
+function ddApplyMode(mode) {
+  ddOutputMode = mode;
+  localStorage.setItem(DD_MODE_KEY, mode);
+  if (ddModeSwitch) {
+    ddModeSwitch.querySelectorAll('.mode-opt').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.mode === mode);
+    });
+  }
+}
+ddApplyMode(ddOutputMode);
+
+if (ddModeSwitch) {
+  ddModeSwitch.addEventListener('click', (e) => {
+    const btn = e.target.closest('.mode-opt');
+    if (!btn) return;
+    ddApplyMode(btn.dataset.mode);
+    showStatus(`Output: ${btn.dataset.mode}`, 'success');
+  });
+}
+
+// ─── Peer status indicator ─────────────────────────────────────────────
+function ddSetPeer(connected) {
+  ddPeerConnected = connected;
+  if (ddPeerDot) {
+    ddPeerDot.classList.toggle('connected', connected);
+    ddPeerDot.title = connected ? 'Mobile connected' : 'Mobile not connected';
+  }
+}
+
+// ─── WebSocket connect / reconnect ─────────────────────────────────────
+async function ddConnectWs() {
+  if (ddWs && (ddWs.readyState === WebSocket.OPEN || ddWs.readyState === WebSocket.CONNECTING)) return;
+  let token;
+  try { token = await ipcRenderer.invoke('get-auth-token'); } catch { token = null; }
+  if (!token) return; // not logged in yet
+
+  try {
+    ddWs = new WebSocket(DD_WS_URL);
+  } catch (e) {
+    console.warn('[dd] WS construct failed', e);
+    return ddScheduleReconnect();
+  }
+
+  ddWs.onopen = () => {
+    ddWsBackoff = 1000;
+    ddWs.send(JSON.stringify({ type: 'hello', role: 'desktop', token }));
+    console.log('[dd] WS connected');
+  };
+
+  ddWs.onmessage = (evt) => {
+    let msg;
+    try { msg = JSON.parse(evt.data); } catch { return; }
+    switch (msg.type) {
+      case 'ready':
+        console.log('[dd] attached as desktop. peer:', msg.peerConnected);
+        ddSetPeer(!!msg.peerConnected);
+        break;
+      case 'peer-joined':
+        if (msg.role === 'mobile') {
+          ddSetPeer(true);
+          showStatus('📱 Mobile connected', 'success');
+        }
+        break;
+      case 'peer-left':
+        if (msg.role === 'mobile') {
+          ddSetPeer(false);
+          showStatus('📱 Mobile disconnected', 'error');
+        }
+        break;
+      case 'trigger:answer':
+        console.log('[dd] remote trigger: answer');
+        if (typeof generateAIAnswer === 'function') generateAIAnswer();
+        break;
+      case 'trigger:screenshot':
+        console.log('[dd] remote trigger: screenshot');
+        if (typeof captureAndAnalyzeScreenshot === 'function') captureAndAnalyzeScreenshot();
+        break;
+      case 'trigger:clear':
+        document.getElementById('clear-response')?.click();
+        break;
+      case 'error':
+        console.warn('[dd] WS error from server:', msg.error);
+        break;
+    }
+  };
+
+  ddWs.onclose = () => {
+    ddSetPeer(false);
+    ddScheduleReconnect();
+  };
+  ddWs.onerror = (e) => { console.warn('[dd] WS error', e); };
+}
+
+function ddScheduleReconnect() {
+  if (ddWsReconnectTimer) return;
+  const delay = Math.min(ddWsBackoff, 20_000);
+  ddWsBackoff = Math.min(ddWsBackoff * 2, 20_000);
+  ddWsReconnectTimer = setTimeout(() => {
+    ddWsReconnectTimer = null;
+    ddConnectWs();
+  }, delay);
+}
+
+// Connect once auth lands
+ipcRenderer.on('auth-state', (_event, state) => {
+  if (state && state.status === 'authenticated') {
+    // Small delay so token is on disk
+    setTimeout(ddConnectWs, 300);
+  } else if (ddWs) {
+    try { ddWs.close(); } catch (_) {}
+    ddWs = null;
+    ddSetPeer(false);
+  }
+});
+
+// Also try to connect on script load — covers the case where `auth-state`
+// fired before this handler was registered (page just reloaded, etc.).
+// ddConnectWs is idempotent and early-returns if already OPEN/CONNECTING.
+setTimeout(() => { ddConnectWs(); }, 800);
+
+// Pair Mobile flow ─────────────────────────────────────────────────────
+let QRCodeLib = null;
+try { QRCodeLib = require('qrcode'); } catch (e) { console.warn('qrcode lib missing', e); }
+
+async function ddOpenPairModal() {
+  if (!ddPairModal) return;
+  ddPairModal.style.display = 'flex';
+  ddPairQr.innerHTML = '<div style="color:#0a0a0b;font-size:11px;">generating…</div>';
+  ddPairUrl.textContent = 'generating…';
+
+  let token;
+  try { token = await ipcRenderer.invoke('get-auth-token'); } catch { token = null; }
+  if (!token) {
+    ddPairUrl.textContent = 'not authenticated';
+    return;
+  }
+
+  try {
+    const res = await fetch(`${DD_BACKEND}/api/pair/token`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${token}` },
+    });
+    if (!res.ok) throw new Error('pair token request failed: ' + res.status);
+    const data = await res.json();
+    ddPairUrl.textContent = data.mobileUrl;
+    if (ddPairExpires) ddPairExpires.textContent = Math.floor((data.expiresIn || 300) / 60);
+
+    if (QRCodeLib) {
+      const canvas = document.createElement('canvas');
+      await QRCodeLib.toCanvas(canvas, data.mobileUrl, {
+        width: 200, margin: 0, color: { dark: '#0a0a0b', light: '#ffffff' },
+      });
+      ddPairQr.innerHTML = '';
+      ddPairQr.appendChild(canvas);
+    } else {
+      // Fallback: external free QR service
+      const img = document.createElement('img');
+      img.src = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(data.mobileUrl)}`;
+      ddPairQr.innerHTML = '';
+      ddPairQr.appendChild(img);
+    }
+  } catch (e) {
+    console.error('[dd] pair token error', e);
+    ddPairUrl.textContent = 'Error generating token. Is the backend running?';
+  }
+}
+
+function ddClosePairModal() {
+  if (ddPairModal) ddPairModal.style.display = 'none';
+}
+
+if (ddPairBtn)      ddPairBtn.addEventListener('click', ddOpenPairModal);
+if (ddPairCloseBtn) ddPairCloseBtn.addEventListener('click', ddClosePairModal);
+if (ddPairModal) {
+  ddPairModal.addEventListener('click', (e) => {
+    if (e.target === ddPairModal) ddClosePairModal();
+  });
+}
