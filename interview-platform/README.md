@@ -72,16 +72,42 @@ interview-platform/
 
 ---
 
-## Prerequisites
+## 🚀 Quick Start (Docker - Recommended)
+
+**One command to run everything:**
+
+```bash
+cd interview-platform
+docker-compose up --build
+```
+
+That's it! 🎉
+
+- **Frontend:** http://localhost:5173
+- **Backend API:** http://localhost:5000
+- **Test Login:** `testuser@example.com` / `Test@123`
+
+### Optional: Add API Keys
+
+Create a `.env` file in `interview-platform/` folder:
+```bash
+RAZORPAY_KEY_ID=rzp_test_xxxxx
+RAZORPAY_KEY_SECRET=xxxxx
+OPENAI_API_KEY=sk-xxxxx
+```
+
+Then run: `docker-compose up --build`
+
+---
+
+## Manual Setup (Without Docker)
+
+### Prerequisites
 
 - Node.js v18+
 - PostgreSQL 14+
 - Razorpay account (test keys from [dashboard.razorpay.com](https://dashboard.razorpay.com))
 - OpenAI API key
-
----
-
-## Setup
 
 ### 1. Create PostgreSQL Database
 
